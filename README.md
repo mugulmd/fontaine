@@ -88,6 +88,61 @@ A few decisions worth knowing about:
 - **The text never correlates with the font.** Content and casing are sampled
   independently of the face, so the letterforms are the only signal.
 
+## The stream
+
+Which font each item uses is decided by a Chinese-restaurant process: at each step
+it either introduces a font never seen before, or reuses one already seen with
+probability proportional to that font's recent popularity. Three properties the
+recognizer has to deal with fall out of that:
+
+- **progressive discovery** — the font set is never declared up front,
+- **a long tail** — popularity is rich-get-richer, so a few fonts dominate and many
+  stay rare, which is far harder than a uniform draw,
+- **drift** — popularity is counted with exponential forgetting, so a font that
+  stops appearing fades and can come back later.
+
+`half_life` is what produces the third one, and it matters more than it looks. With
+forgetting off, the chance of a new font decays like 1/t and the stream ossifies —
+on a 437-face pool, plain CRP had found 76 fonts after 50k items and effectively
+stopped, while `half_life: 2000` reached 200 and was still discovering.
+
+Tune it without rendering anything:
+
+```sh
+uv run fontaine arrival -n 50000        # simulate only; runs in well under a second
+```
+
+Then materialize a stream:
+
+```sh
+uv run fontaine generate -n 10000 -o data/streams/v1
+uv run fontaine preview -n 36 --stream  # what the recognizer actually sees, in order
+```
+
+```
+data/streams/v1/manifest.json      config snapshot, font registry, discovery ground truth
+data/streams/v1/annotations.jsonl  one line per item, in stream order
+data/streams/v1/crops/00000/*.png  the crops, sharded by index
+```
+
+The manifest is written last, so a directory with a manifest is a complete stream
+and an interrupted run cannot be mistaken for a finished one. It records
+`label_first_seen` per label, which is what you need to score discovery lag later.
+
+**The stream is an iterator, not a directory.** `StreamGenerator` yields
+`Sample`s lazily and `store.reader.read_stream` yields the identical objects from
+disk — verified pixel-for-pixel in the tests. So an online learner can train
+against a live infinite generator or a frozen stream through the same code path,
+with no branching on its side.
+
+```python
+from fontaine.store.reader import read_stream
+
+for sample in read_stream(Path("data/streams/v1")):
+    prediction = model.predict(sample.image)   # predict before seeing the label
+    model.learn(sample.image, sample.label)    # then learn from it
+```
+
 ## Tests
 
 ```sh
