@@ -15,3 +15,6 @@ data/
 # Fonts you drop in (keep the dir, not the files)
 assets/fonts/*
 !assets/fonts/.gitkeep
+
+# Presentation decks
+.data/
