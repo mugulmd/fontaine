@@ -77,6 +77,27 @@ class FontsConfig:
 
 
 @dataclass(slots=True)
+class ArrivalConfig:
+    """Which font each arriving item uses, and when new fonts first appear.
+
+    The set of fonts is not declared up front: it is discovered as the stream
+    advances, which is the whole point of the exercise.
+    """
+
+    #: Concentration of the Chinese-restaurant process. Higher means new fonts
+    #: keep appearing for longer and popularity is spread more evenly; lower means
+    #: the stream settles onto a few fonts quickly.
+    concentration: float = 8.0
+    #: Half-life in items of a font's popularity, giving concept drift: a font
+    #: that stops appearing fades and can later come back. 0 disables forgetting,
+    #: leaving a plain rich-get-richer process whose discovery rate decays to zero.
+    half_life: int = 2000
+    #: Introduce fonts in a seed-shuffled order rather than registry order, so
+    #: discovery order is not alphabetical.
+    shuffle_pool: bool = True
+
+
+@dataclass(slots=True)
 class CorpusConfig:
     """What the text says. Deliberately uncorrelated with the font that draws it."""
 
@@ -194,6 +215,7 @@ class StreamConfig:
     #: i is reproducible without replaying the items before it.
     seed: int = 0
     fonts: FontsConfig = field(default_factory=FontsConfig)
+    arrival: ArrivalConfig = field(default_factory=ArrivalConfig)
     render: RenderConfig = field(default_factory=RenderConfig)
 
 
@@ -234,6 +256,35 @@ def _build(cls: type[T], data: dict[str, Any], *, context: str) -> T:
     )
 
 
+def to_dict(value: Any) -> Any:
+    """Recursively convert a config object to JSON-serializable data.
+
+    Used to snapshot the exact configuration into a stream's manifest, so a
+    generated stream stays interpretable even after the config file moves on.
+    """
+    if isinstance(value, Range):
+        # Same shape it has in YAML, so a snapshot can be loaded back as a config.
+        return [value.lo, value.hi]
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: to_dict(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_dict(item) for item in value]
+    return value
+
+
+def from_dict(data: dict[str, Any], *, context: str = "config") -> StreamConfig:
+    """Rebuild a :class:`StreamConfig` from :func:`to_dict` output.
+
+    Lets a stream's manifest snapshot be loaded back as a config, so the exact
+    settings a stream was generated with can be recovered from the stream itself.
+    """
+    return _build(StreamConfig, data, context=context)
+
+
 def load_stream_config(path: Path | None = DEFAULT_CONFIG_PATH) -> StreamConfig:
     """Load a :class:`StreamConfig`; ``None`` yields the built-in defaults."""
     if path is None:
@@ -241,4 +292,4 @@ def load_stream_config(path: Path | None = DEFAULT_CONFIG_PATH) -> StreamConfig:
     if not path.is_file():
         raise FileNotFoundError(f"config not found: {path}")
     data = yaml.safe_load(path.read_text()) or {}
-    return _build(StreamConfig, data, context=path.name)
+    return from_dict(data, context=path.name)

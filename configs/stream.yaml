@@ -20,6 +20,21 @@ fonts:
   exclude: []
   include_variable: false
 
+# Which font each arriving item uses. The font set is not declared up front — it is
+# discovered as the stream advances.
+arrival:
+  # Concentration of the Chinese-restaurant process. Higher keeps new fonts
+  # arriving for longer and spreads popularity more evenly; lower settles onto a
+  # few dominant fonts fast.
+  concentration: 8.0
+  # Half-life in items of a font's popularity, which is what produces drift: a
+  # font that stops appearing fades and can come back later. It also keeps
+  # discovery going indefinitely — with forgetting off (0), the chance of a new
+  # font decays like 1/t and the stream ossifies.
+  half_life: 2000
+  # Introduce fonts in a seed-shuffled order rather than alphabetically.
+  shuffle_pool: true
+
 render:
   # What the text says. Uncorrelated with the font by design — if words went with
   # fonts, a recognizer could read the words instead of the letterforms.
