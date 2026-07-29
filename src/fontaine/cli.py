@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fontaine.config import load_fonts_config
+from fontaine.config import DEFAULT_CONFIG_PATH, StreamConfig, load_stream_config
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
 
@@ -20,20 +20,46 @@ app.add_typer(fonts_app, name="fonts")
 
 console = Console()
 
-ConfigOption = Annotated[
-    Path | None,
-    typer.Option("--config", "-c", help="Fonts config YAML. Defaults to built-in defaults."),
+ConfigOption = Annotated[Path, typer.Option("--config", "-c", help="Stream config YAML.")]
+FontDirOption = Annotated[
+    Path | None, typer.Option("--font-dir", help="Override the config's font dir.")
 ]
+VerboseOption = Annotated[
+    bool, typer.Option("--verbose", help="Surface fontTools' per-table warnings.")
+]
+
+
+def _load(config: Path) -> StreamConfig:
+    try:
+        return load_stream_config(config)
+    except (FileNotFoundError, ValueError) as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+
+
+def _scan(settings: StreamConfig, *, verbose: bool = False) -> font_registry.FontRegistry:
+    fonts = settings.fonts
+    try:
+        return font_registry.scan(
+            fonts.font_dir,
+            charset=fonts.admission_charset,
+            label_granularity=fonts.label_granularity,
+            exclude=fonts.exclude,
+            include_variable=fonts.include_variable,
+            verbose=verbose,
+        )
+    except NotADirectoryError as error:
+        console.print(f"[red]{error}[/red]")
+        console.print("Drop .ttf/.otf files in, or pass --font-dir.", style="dim")
+        raise typer.Exit(code=1) from error
 
 
 @fonts_app.command("scan")
 def fonts_scan(
-    config: ConfigOption = None,
-    font_dir: Annotated[
-        Path | None, typer.Option("--font-dir", help="Override the config's font dir.")
-    ] = None,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+    font_dir: FontDirOption = None,
     charset: Annotated[
-        str | None, typer.Option("--charset", help="Override the config's charset.")
+        str | None, typer.Option("--charset", help="Override the admission charset.")
     ] = None,
     include_variable: Annotated[
         bool, typer.Option("--include-variable", help="Keep variable fonts in the label space.")
@@ -44,41 +70,23 @@ def fonts_scan(
     json_out: Annotated[
         Path | None, typer.Option("--json", help="Write the registry snapshot to this path.")
     ] = None,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Surface fontTools' per-table warnings.")
-    ] = False,
+    verbose: VerboseOption = False,
 ) -> None:
     """Build the label space from the font dir and report what was kept and dropped."""
-    settings = load_fonts_config(config)
+    settings = _load(config)
     if font_dir is not None:
-        settings.font_dir = font_dir
+        settings.fonts.font_dir = font_dir
     if charset is not None:
-        settings.charset = charset
+        settings.fonts.admission_charset = charset
     if include_variable:
-        settings.include_variable = True
+        settings.fonts.include_variable = True
 
-    try:
-        registry = font_registry.scan(
-            settings.font_dir,
-            charset=settings.charset,
-            label_granularity=settings.label_granularity,
-            exclude=settings.exclude,
-            include_variable=settings.include_variable,
-            verbose=verbose,
-        )
-    except NotADirectoryError as error:
-        console.print(f"[red]{error}[/red]")
-        console.print(
-            "Create it and drop .ttf/.otf/.ttc files in, or pass --font-dir.",
-            style="dim",
-        )
-        raise typer.Exit(code=1)
-
-    required = resolve_charset(settings.charset)
-    preset = " (preset)" if settings.charset in CHARSET_PRESETS else " (literal)"
+    registry = _scan(settings, verbose=verbose)
+    required = resolve_charset(settings.fonts.admission_charset)
+    origin = " (preset)" if settings.fonts.admission_charset in CHARSET_PRESETS else " (literal)"
     console.print(
-        f"[bold]{settings.font_dir}[/bold] — charset [cyan]{settings.charset}[/cyan]{preset}, "
-        f"{len(required)} required glyphs"
+        f"[bold]{settings.fonts.font_dir}[/bold] — admission charset "
+        f"[cyan]{settings.fonts.admission_charset}[/cyan]{origin}, {len(required)} required glyphs"
     )
 
     if list_faces and registry.faces:
@@ -146,7 +154,7 @@ def _rejected_table(registry: font_registry.FontRegistry) -> Table:
         title_justify="left",
         header_style="bold yellow",
     )
-    table.add_column("face")
+    table.add_column("face", overflow="fold")
     table.add_column("reason")
     table.add_column("detail", overflow="fold")
     table.add_column("file", overflow="fold", style="dim")

@@ -1,0 +1,96 @@
+# One stream, end to end. Relative paths resolve from the repo root.
+
+# Base seed. Every item derives its own RNG from (seed, index), so item i is
+# reproducible on its own without replaying the items before it.
+seed: 0
+
+fonts:
+  font_dir: assets/fonts
+
+  # face   → georgia:regular and georgia:bold-italic are distinct classes
+  #          (recommended: classes then match what is visible in the pixels)
+  # family → every weight and slant collapses into georgia
+  label_granularity: face
+
+  # Glyphs a face must have to enter the label space. Keep this to a core set:
+  # the corpus intersects its alphabet with each face's real coverage, so a face
+  # missing a few rare glyphs still contributes rather than being excluded.
+  admission_charset: ascii_alnum
+
+  exclude: []
+  include_variable: false
+
+render:
+  # What the text says. Uncorrelated with the font by design — if words went with
+  # fonts, a recognizer could read the words instead of the letterforms.
+  corpus:
+    kinds:
+      word: 3.0
+      phrase: 4.0
+      sentence: 2.0
+      number: 1.0
+      price: 1.0
+      date: 0.5
+      time: 0.5
+      token: 1.0
+    words: [2, 5]
+    casing:
+      as_is: 4.0
+      title: 3.0
+      upper: 2.0
+      lower: 1.0
+
+  typography:
+    # Target cap height in pixels, sampled log-uniformly. Sizing by cap height
+    # rather than em size keeps apparent size comparable across faces, so
+    # absolute scale cannot leak the label.
+    cap_height_px: [8, 44]
+    # Tracking as a fraction of cap height. Non-zero switches to a per-character
+    # drawing path that loses ligatures, so v1 leaves it off.
+    letter_spacing: [0.0, 0.0]
+
+  background:
+    sources:
+      photo: 6.0        # dropped and the rest renormalized if photo_dir is empty
+      gradient: 2.0
+      solid: 2.0
+    photo_dir: data/backgrounds
+    # Patch size relative to the canvas before resampling to fit: above 1 zooms
+    # out to finer texture, below 1 zooms in to smoother gradients.
+    photo_scale: [0.5, 3.0]
+    # Target WCAG contrast between the text and the background under it, held
+    # against the harder end of the background's range rather than its mean.
+    # 4.5 is the WCAG floor for body text; dropping it toward 2.0 is one of the
+    # sharpest difficulty knobs there is, especially at small cap heights.
+    contrast_ratio: [4.5, 16.0]
+    dark_text_prob: 0.6
+    saturated_prob: 0.25
+    # A scrim is also forced regardless of this probability when the background
+    # varies too much across the text box for one colour to stay legible.
+    scrim_prob: 0.15
+    scrim_opacity: [0.25, 0.8]
+    min_contrast: 1.9
+
+  crop:
+    # Per-side padding around the tight ink box, in units of ink height, sampled
+    # independently per side. Negative clips into the glyphs, as a too-tight
+    # detector box does. This is not a degradation: crops from a text detector
+    # are imprecise by nature, so it stays on even in v1.
+    pad: [-0.04, 0.35]
+    # A neighbouring line bleeding in at an edge. Off for v1.
+    neighbor_bleed_prob: 0.0
+    neighbor_gap: [0.15, 0.7]
+
+  # Capture artefacts. All off in v1 — clean renders first, so the pipeline can
+  # be validated against an easy accuracy ceiling.
+  degrade:
+    blur_prob: 0.0
+    blur_radius: [0.3, 1.2]
+    downscale_prob: 0.0
+    downscale_factor: [0.4, 0.9]
+    jpeg_prob: 0.0
+    jpeg_quality: [30, 85]
+    noise_prob: 0.0
+    noise_sigma: [2.0, 12.0]
+    rotate_prob: 0.0
+    rotate_deg: [-2.5, 2.5]
