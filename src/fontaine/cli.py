@@ -9,6 +9,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from fontaine.config import DEFAULT_CONFIG_PATH, StreamConfig, load_stream_config
@@ -17,6 +18,9 @@ from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
 from fontaine.render import background as background_module
 from fontaine.render.textbox import CropRenderer, RenderError
 from fontaine.rng import item_rng
+from fontaine.store.writer import write_stream
+from fontaine.stream.arrival import ArrivalProcess, ArrivalStats
+from fontaine.stream.generator import StreamGenerator
 from fontaine.viz.contact_sheet import contact_sheet
 
 app = typer.Typer(help="Synthetic font-recognition streams.", no_args_is_help=True)
@@ -132,13 +136,22 @@ def preview(
     columns: Annotated[int, typer.Option("--columns", help="Cells per row.")] = 6,
     cell_height: Annotated[int, typer.Option("--cell-height", help="Row height in pixels.")] = 56,
     seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
+    from_stream: Annotated[
+        bool,
+        typer.Option(
+            "--stream/--all-faces",
+            help="Draw items from the arrival process instead of cycling every face.",
+        ),
+    ] = False,
     font_dir: FontDirOption = None,
     verbose: VerboseOption = False,
 ) -> None:
     """Render a batch of crops to a contact sheet, to check the renders by eye.
 
-    Faces are taken in registry order and cycled, so a large enough count shows
-    every font in the label space at least once.
+    By default faces are taken in registry order and cycled, so a large enough
+    count shows every font in the label space at least once. ``--stream`` instead
+    draws the first items of the actual stream, which shows what the recognizer
+    really sees — dominated by whichever fonts arrived early.
     """
     settings = _load(config)
     if font_dir is not None:
@@ -163,22 +176,33 @@ def preview(
             "no PNGs found, falling back to synthetic canvases", style="yellow"
         )
 
-    renderer = CropRenderer(settings.render)
     cells: list[tuple[object, str]] = []
     stats: Counter[str] = Counter()
     failures: list[str] = []
-    for index in range(count):
-        face = registry.faces[index % len(registry.faces)]
-        rng = item_rng(settings.seed, index)
-        try:
-            crop = renderer.render(face, rng)
-        except RenderError as error:
-            failures.append(str(error))
-            continue
-        stats[crop.metadata["background"]] += 1
-        stats[f"kind:{crop.metadata['text_kind']}"] += 1
-        label = f"{face.label(registry.label_granularity)}  {crop.metadata['cap_height_px']:.0f}px"
-        cells.append((crop.image, label))
+
+    if from_stream:
+        generator = StreamGenerator(settings, registry)
+        for sample in generator.take(count):
+            stats[sample.metadata["background"]] += 1
+            stats[f"kind:{sample.metadata['text_kind']}"] += 1
+            marker = " NEW" if sample.metadata["label_first_seen"] else ""
+            cells.append(
+                (sample.image, f"{sample.label}  {sample.metadata['cap_height_px']:.0f}px{marker}")
+            )
+        failures = [item.error for item in generator.skipped]
+    else:
+        renderer = CropRenderer(settings.render)
+        for index in range(count):
+            face = registry.faces[index % len(registry.faces)]
+            try:
+                crop = renderer.render(face, item_rng(settings.seed, index))
+            except RenderError as error:
+                failures.append(str(error))
+                continue
+            stats[crop.metadata["background"]] += 1
+            stats[f"kind:{crop.metadata['text_kind']}"] += 1
+            label = face.label(registry.label_granularity)
+            cells.append((crop.image, f"{label}  {crop.metadata['cap_height_px']:.0f}px"))
 
     if not cells:
         console.print("[red]every render failed[/red]")
@@ -197,6 +221,135 @@ def preview(
     console.print(f"content kinds: {_summarize(kinds)}", style="dim")
     if failures:
         console.print(f"[yellow]{len(failures)} renders failed[/yellow]: {failures[0]}")
+
+
+@app.command("generate")
+def generate(
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+    count: Annotated[int, typer.Option("--count", "-n", help="How many items to write.")] = 10_000,
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="Stream directory to create.")
+    ] = Path("data/streams/v1"),
+    seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
+    font_dir: FontDirOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Materialize a stream to disk: crops, annotations and a manifest."""
+    settings = _load(config)
+    if font_dir is not None:
+        settings.fonts.font_dir = font_dir
+    if seed is not None:
+        settings.seed = seed
+
+    registry = _scan(settings, verbose=verbose)
+    if not registry.faces:
+        console.print("[red]empty label space — nothing to generate[/red]")
+        raise typer.Exit(code=1)
+
+    generator = StreamGenerator(settings, registry)
+    console.print(
+        f"{len(registry.faces)} faces available, seed {settings.seed}, "
+        f"concentration {settings.arrival.concentration}, half-life "
+        f"{settings.arrival.half_life or 'off'}"
+    )
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("generating", total=count)
+        report = write_stream(
+            generator, count, out, on_item=lambda _: progress.advance(task)
+        )
+
+    console.print(
+        f"[green]{report.n_items}[/green] items → [bold]{report.directory}[/bold], "
+        f"[green]{report.n_labels}[/green] labels from "
+        f"[green]{report.n_faces}[/green] faces"
+    )
+    if report.n_skipped:
+        console.print(f"[yellow]{report.n_skipped} items skipped[/yellow]")
+    console.print(_discovery_table(generator.stats, report.n_items, len(registry.labels)))
+    console.print(_popularity_line(generator.stats.label_counts, report.n_items), style="dim")
+
+
+@app.command("arrival")
+def arrival(
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+    count: Annotated[
+        int, typer.Option("--count", "-n", help="How many steps to simulate.")
+    ] = 50_000,
+    seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
+    font_dir: FontDirOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Simulate the arrival process without rendering anything.
+
+    Nothing is drawn, so this runs in a fraction of a second — the cheap way to
+    tune concentration and half-life against the discovery curve you want.
+    """
+    settings = _load(config)
+    if font_dir is not None:
+        settings.fonts.font_dir = font_dir
+    if seed is not None:
+        settings.seed = seed
+
+    registry = _scan(settings, verbose=verbose)
+    if not registry.faces:
+        console.print("[red]empty label space — nothing to simulate[/red]")
+        raise typer.Exit(code=1)
+
+    process = ArrivalProcess(
+        registry.faces,
+        settings.arrival,
+        seed=settings.seed,
+        label_granularity=registry.label_granularity,
+    )
+    process.take(count)
+
+    console.print(
+        f"{count} steps over {len(registry.faces)} faces — "
+        f"concentration {settings.arrival.concentration}, half-life "
+        f"{settings.arrival.half_life or 'off'}"
+    )
+    console.print(_discovery_table(process.stats, count, len(registry.labels)))
+    console.print(_popularity_line(process.stats.label_counts, count), style="dim")
+    if not process.exhausted:
+        remaining = len(registry.faces) - len(process.stats.face_first_seen)
+        console.print(
+            f"[yellow]{remaining} faces never appeared[/yellow] — raise concentration, "
+            f"lengthen the stream, or shorten the half-life",
+        )
+
+
+def _discovery_table(stats: ArrivalStats, n_items: int, n_labels: int) -> Table:
+    """How much of the label space had been discovered by each point in the stream."""
+    table = Table(title="discovery", title_justify="left", header_style="bold")
+    table.add_column("by item", justify="right")
+    table.add_column("labels seen", justify="right")
+    table.add_column("share", justify="right")
+
+    first_seen = sorted(stats.label_first_seen.values())
+    checkpoints = [point for point in (10, 100, 1_000, 10_000, 100_000) if point < n_items]
+    for point in [*checkpoints, n_items]:
+        seen = sum(1 for step in first_seen if step < point)
+        table.add_row(f"{point:,}", f"{seen}/{n_labels}", f"{seen / n_labels:.0%}")
+    return table
+
+
+def _popularity_line(counts: dict[str, int], n_items: int) -> str:
+    if not counts or not n_items:
+        return "no items"
+    ranked = sorted(counts.values(), reverse=True)
+    top = sum(ranked[:5]) / n_items
+    singletons = sum(1 for value in ranked if value == 1)
+    return (
+        f"popularity: top 5 labels hold {top:.0%} of items, "
+        f"{singletons} label(s) appeared exactly once"
+    )
 
 
 def _summarize(counts: dict[str, int]) -> str:
