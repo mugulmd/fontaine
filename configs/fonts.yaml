@@ -1,0 +1,21 @@
+# Font universe: what makes up the label space.
+# Relative paths are resolved from the repo root (run commands from there).
+
+font_dir: assets/fonts
+
+# face   → Roboto-Bold and Roboto-Regular are distinct classes (recommended:
+#          classes align with what is visible in the pixels)
+# family → every weight and slant of Roboto collapses into one class
+label_granularity: face
+
+# Preset name (ascii_alnum | ascii_printable | latin1_printable) or a literal
+# string of characters. Faces missing any of these glyphs are reported and
+# excluded from the label space.
+charset: ascii_printable
+
+# Filename or path globs to skip before parsing.
+exclude: []
+
+# Variable fonts are excluded by default — v1 renders static instances only, so
+# a variable file would contribute one arbitrary default face.
+include_variable: false
