@@ -23,9 +23,22 @@ def build_font(
     subfamily: str = "Regular",
     weight: int = 400,
     italic: bool = False,
+    glyph_height: int = 700,
 ) -> Path:
-    """Write a minimal but valid TTF whose cmap covers exactly ``chars``."""
-    font = _make_font(chars=chars, family=family, subfamily=subfamily, weight=weight, italic=italic)
+    """Write a minimal but valid TTF whose cmap covers exactly ``chars``.
+
+    ``glyph_height`` is in font units out of a 1000 em, so two fonts can differ in
+    apparent size at the same em size — which is what cap-height normalization is
+    there to cancel out.
+    """
+    font = _make_font(
+        chars=chars,
+        family=family,
+        subfamily=subfamily,
+        weight=weight,
+        italic=italic,
+        glyph_height=glyph_height,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     font.save(path)
     return path
@@ -47,6 +60,7 @@ def _make_font(
     subfamily: str = "Regular",
     weight: int = 400,
     italic: bool = False,
+    glyph_height: int = 700,
 ) -> TTFont:
     builder = FontBuilder(UPEM, isTTF=True)
     glyph_names = {char: f"uni{ord(char):04X}" for char in dict.fromkeys(chars)}
@@ -56,8 +70,8 @@ def _make_font(
 
     pen = TTGlyphPen(None)
     pen.moveTo((50, 0))
-    pen.lineTo((50, 700))
-    pen.lineTo((450, 700))
+    pen.lineTo((50, glyph_height))
+    pen.lineTo((450, glyph_height))
     pen.lineTo((450, 0))
     pen.closePath()
     box = pen.glyph()
