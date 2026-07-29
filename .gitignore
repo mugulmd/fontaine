@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Data and generated streams
+data/
+
+# Fonts you drop in (keep the dir, not the files)
+assets/fonts/*
+!assets/fonts/.gitkeep
