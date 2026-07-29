@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Annotated
 
@@ -13,6 +14,10 @@ from rich.table import Table
 from fontaine.config import DEFAULT_CONFIG_PATH, StreamConfig, load_stream_config
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
+from fontaine.render import background as background_module
+from fontaine.render.textbox import CropRenderer, RenderError
+from fontaine.rng import item_rng
+from fontaine.viz.contact_sheet import contact_sheet
 
 app = typer.Typer(help="Synthetic font-recognition streams.", no_args_is_help=True)
 fonts_app = typer.Typer(help="Inspect the font universe.", no_args_is_help=True)
@@ -115,6 +120,87 @@ def fonts_scan(
         json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(json.dumps(registry.to_dict(), indent=2))
         console.print(f"registry snapshot → [bold]{json_out}[/bold]")
+
+
+@app.command("preview")
+def preview(
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+    count: Annotated[int, typer.Option("--count", "-n", help="How many crops to render.")] = 48,
+    out: Annotated[Path, typer.Option("--out", "-o", help="Contact sheet path.")] = Path(
+        "data/preview.png"
+    ),
+    columns: Annotated[int, typer.Option("--columns", help="Cells per row.")] = 6,
+    cell_height: Annotated[int, typer.Option("--cell-height", help="Row height in pixels.")] = 56,
+    seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
+    font_dir: FontDirOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Render a batch of crops to a contact sheet, to check the renders by eye.
+
+    Faces are taken in registry order and cycled, so a large enough count shows
+    every font in the label space at least once.
+    """
+    settings = _load(config)
+    if font_dir is not None:
+        settings.fonts.font_dir = font_dir
+    if seed is not None:
+        settings.seed = seed
+
+    registry = _scan(settings, verbose=verbose)
+    if not registry.faces:
+        console.print("[red]empty label space — nothing to render[/red]")
+        raise typer.Exit(code=1)
+
+    images = background_module.count_images(settings.render.background)
+    sources = background_module.available_sources(settings.render.background)
+    console.print(
+        f"{len(registry.faces)} faces, {images} background image(s) in "
+        f"[bold]{settings.render.background.photo_dir}[/bold] — "
+        f"sources: {', '.join(sorted(sources))}"
+    )
+    if not images and "photo" in settings.render.background.sources:
+        console.print(
+            "no PNGs found, falling back to synthetic canvases", style="yellow"
+        )
+
+    renderer = CropRenderer(settings.render)
+    cells: list[tuple[object, str]] = []
+    stats: Counter[str] = Counter()
+    failures: list[str] = []
+    for index in range(count):
+        face = registry.faces[index % len(registry.faces)]
+        rng = item_rng(settings.seed, index)
+        try:
+            crop = renderer.render(face, rng)
+        except RenderError as error:
+            failures.append(str(error))
+            continue
+        stats[crop.metadata["background"]] += 1
+        stats[f"kind:{crop.metadata['text_kind']}"] += 1
+        label = f"{face.label(registry.label_granularity)}  {crop.metadata['cap_height_px']:.0f}px"
+        cells.append((crop.image, label))
+
+    if not cells:
+        console.print("[red]every render failed[/red]")
+        for failure in failures[:5]:
+            console.print(f"  {failure}", style="dim")
+        raise typer.Exit(code=1)
+
+    sheet = contact_sheet(cells, columns=columns, cell_height=cell_height)  # type: ignore[arg-type]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(out)
+
+    console.print(f"{len(cells)} crops → [bold]{out}[/bold] ({sheet.width}×{sheet.height})")
+    backgrounds = {key: value for key, value in stats.items() if not key.startswith("kind:")}
+    kinds = {key.removeprefix("kind:"): value for key, value in stats.items() if key.startswith("kind:")}
+    console.print(f"backgrounds: {_summarize(backgrounds)}", style="dim")
+    console.print(f"content kinds: {_summarize(kinds)}", style="dim")
+    if failures:
+        console.print(f"[yellow]{len(failures)} renders failed[/yellow]: {failures[0]}")
+
+
+def _summarize(counts: dict[str, int]) -> str:
+    return "  ".join(f"{key} {value}" for key, value in sorted(counts.items(), key=lambda item: -item[1]))
 
 
 def _faces_table(registry: font_registry.FontRegistry) -> Table:
