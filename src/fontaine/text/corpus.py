@@ -1,0 +1,264 @@
+"""Text content for the crops.
+
+The text is deliberately uncorrelated with the font that draws it: if particular
+words went with particular fonts, a recognizer could read the words instead of
+looking at the letterforms.
+
+Every sample is projected onto the characters the chosen face can actually draw,
+so a face missing a few rare glyphs still contributes its full share of items
+instead of being excluded from the label space.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+
+from fontaine.config import CorpusConfig
+
+CONTENT_KINDS = ("word", "phrase", "sentence", "number", "price", "date", "time", "token")
+
+#: A small, deliberately mundane vocabulary. Breadth of *letter combinations*
+#: matters here, not breadth of meaning.
+VOCABULARY: tuple[str, ...] = (
+    "about", "above", "across", "action", "after", "again", "agency", "almost", "already",
+    "always", "amount", "another", "answer", "anyone", "around", "arrive", "artist", "aspect",
+    "author", "autumn", "avenue", "average", "balance", "become", "before", "behind", "believe",
+    "better", "between", "beyond", "bright", "budget", "builder", "bureau", "camera", "campaign",
+    "cancel", "candle", "capital", "careful", "carrier", "center", "central", "certain", "chance",
+    "change", "channel", "chapter", "charge", "choice", "circle", "client", "closer", "coffee",
+    "colour", "column", "combine", "comfort", "command", "comment", "common", "company", "compare",
+    "complex", "concept", "concern", "confirm", "connect", "consider", "contact", "content",
+    "context", "continue", "contract", "control", "convert", "corner", "correct", "council",
+    "counter", "country", "couple", "course", "cover", "create", "credit", "critical", "culture",
+    "current", "custom", "damage", "danger", "darker", "decide", "declare", "decline", "defence",
+    "define", "degree", "deliver", "demand", "density", "depend", "deposit", "describe", "design",
+    "desire", "detail", "detect", "develop", "device", "dialogue", "differ", "digital", "dinner",
+    "direct", "discuss", "display", "distance", "district", "divide", "doctor", "double", "drawing",
+    "driver", "during", "eastern", "economy", "editor", "effect", "effort", "either", "elegant",
+    "element", "energy", "engine", "enough", "ensure", "entire", "episode", "equally", "escape",
+    "estate", "evening", "event", "everyone", "evidence", "exactly", "example", "except",
+    "exchange", "exist", "expand", "expect", "expert", "explain", "explore", "express", "extend",
+    "extra", "fabric", "factor", "failure", "family", "famous", "fashion", "faster", "feature",
+    "federal", "feeling", "figure", "filter", "finance", "finding", "finish", "flavour", "flight",
+    "follow", "forest", "forget", "formal", "format", "former", "fortune", "forward", "founder",
+    "freedom", "friend", "further", "future", "galaxy", "gallery", "garden", "gather", "general",
+    "gentle", "genuine", "gesture", "global", "golden", "govern", "gradual", "graphic", "gravity",
+    "ground", "growth", "guitar", "handle", "happen", "harbour", "header", "health", "hearing",
+    "height", "helpful", "herself", "highest", "history", "holiday", "honest", "horizon",
+    "however", "hunger", "hundred", "husband", "iceberg", "identify", "imagine", "impact",
+    "import", "improve", "include", "indeed", "indoor", "industry", "inform", "initial", "inside",
+    "instead", "intend", "interest", "interior", "invite", "island", "itself", "journal",
+    "journey", "junior", "justice", "kitchen", "knowing", "labour", "landing", "language",
+    "largest", "lasting", "lateral", "laughter", "leader", "leading", "league", "learning",
+    "leather", "lecture", "legend", "leisure", "length", "lesson", "letter", "liberty", "library",
+    "licence", "lighter", "likely", "limited", "linear", "liquid", "listen", "little", "living",
+    "loading", "locate", "logical", "longer", "lookout", "lovely", "loyalty", "machine",
+    "magazine", "maintain", "manage", "manner", "marble", "margin", "marine", "market", "master",
+    "matter", "maximum", "meadow", "meaning", "measure", "medium", "meeting", "member", "memory",
+    "mention", "message", "method", "middle", "mighty", "minimal", "minute", "mirror", "mixture",
+    "mobile", "modern", "moment", "monitor", "morning", "mostly", "motion", "mountain", "moving",
+    "museum", "mutual", "narrow", "nation", "native", "natural", "nearby", "neither", "network",
+    "neutral", "nothing", "notice", "novel", "number", "object", "observe", "obtain", "obvious",
+    "occupy", "ocean", "offer", "office", "often", "online", "opening", "operate", "opinion",
+    "option", "orange", "orbit", "order", "organic", "origin", "outdoor", "outline", "output",
+    "outside", "overall", "package", "painting", "palace", "parallel", "parent", "partner",
+    "passage", "passion", "patient", "pattern", "payment", "peaceful", "people", "perfect",
+    "perhaps", "period", "permit", "person", "photo", "phrase", "physical", "picture", "pioneer",
+    "planet", "plastic", "player", "please", "pleasure", "plenty", "poetry", "policy", "polish",
+    "portrait", "position", "positive", "possible", "posture", "powder", "powerful", "practice",
+    "praise", "precise", "predict", "prefer", "premium", "prepare", "present", "pressure",
+    "pretty", "prevent", "previous", "primary", "printer", "private", "problem", "proceed",
+    "process", "produce", "profile", "program", "project", "promise", "propose", "protect",
+    "proud", "provide", "public", "publish", "purpose", "quality", "quarter", "question", "quick",
+    "quiet", "radius", "railway", "random", "rather", "reading", "ready", "reason", "receive",
+    "recent", "record", "reduce", "refine", "reflect", "reform", "refuse", "regard", "region",
+    "regular", "related", "release", "remain", "remark", "remember", "remind", "remote", "remove",
+    "render", "repair", "repeat", "replace", "report", "request", "require", "rescue", "research",
+    "reserve", "resolve", "resource", "respect", "respond", "restore", "result", "retail",
+    "return", "reveal", "review", "reward", "rhythm", "ribbon", "rising", "river", "roughly",
+    "routine", "runner", "sample", "satisfy", "scatter", "scheme", "school", "science", "screen",
+    "search", "season", "second", "secret", "section", "secure", "select", "senior", "sense",
+    "series", "serious", "service", "session", "settle", "several", "severe", "shadow", "shallow",
+    "sharp", "shelter", "shining", "should", "shoulder", "signal", "silence", "silver", "similar",
+    "simple", "single", "sister", "sketch", "slight", "slowly", "smaller", "smooth", "social",
+    "society", "softly", "solid", "solution", "somehow", "sorted", "sound", "source", "southern",
+    "space", "speak", "special", "specify", "spectrum", "speech", "spirit", "splendid", "spoken",
+    "spread", "spring", "square", "stable", "stadium", "staff", "stage", "stand", "standard",
+    "starter", "statement", "station", "status", "steady", "still", "stone", "storage", "story",
+    "straight", "strange", "stream", "street", "strength", "strike", "strong", "structure",
+    "studio", "study", "stuff", "style", "subject", "submit", "succeed", "sudden", "suggest",
+    "summer", "sunlight", "sunset", "supply", "support", "suppose", "surface", "surprise",
+    "survey", "sweater", "switch", "symbol", "system", "table", "tackle", "talent", "target",
+    "teacher", "technical", "telling", "temple", "tender", "tension", "terrace", "terrible",
+    "testing", "texture", "thanks", "theatre", "themselves", "theory", "therefore", "thinking",
+    "thirty", "though", "thought", "thread", "threat", "through", "thunder", "ticket", "timber",
+    "timing", "tissue", "title", "today", "together", "tomorrow", "tonight", "topic", "total",
+    "touch", "toward", "tower", "traffic", "trailer", "training", "transfer", "transit", "travel",
+    "treasure", "treat", "trend", "trial", "tribute", "trouble", "trust", "truth", "turning",
+    "twelve", "twenty", "typical", "unable", "uncle", "under", "uniform", "unique", "united",
+    "unless", "unlike", "until", "update", "upload", "upper", "urban", "useful", "usually",
+    "utility", "vacuum", "valley", "value", "vanish", "variety", "various", "vector", "vehicle",
+    "velvet", "vendor", "venture", "verbal", "verify", "version", "vertical", "vessel", "veteran",
+    "victory", "viewer", "village", "vintage", "violet", "virtue", "vision", "visitor", "visual",
+    "vitamin", "vivid", "vocal", "volume", "voyage", "waiting", "walking", "wander", "warmth",
+    "warning", "watching", "water", "wealth", "weather", "wedding", "weekend", "weight",
+    "welcome", "western", "whatever", "wheel", "whereas", "whether", "while", "whisper", "white",
+    "willing", "window", "winner", "winter", "wireless", "wisdom", "within", "without", "wonder",
+    "wooden", "worker", "working", "world", "worry", "worth", "writer", "writing", "yellow",
+    "yesterday", "yield", "young", "yourself", "youth", "zenith",
+)
+
+_CURRENCIES = ("$", "€", "£", "¥")
+_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+_TERMINALS = (".", ".", ".", "!", "?", "…")
+_TOKEN_PREFIXES = ("SKU", "REF", "ID", "NO", "LOT", "VER", "AB", "XR")
+
+
+@dataclass(frozen=True, slots=True)
+class TextSample:
+    """A piece of text, and the kind of content it is.
+
+    ``kind`` is recorded in the sample metadata so error rates can later be
+    sliced by content type — long phrases and bare digits are very different
+    recognition problems.
+    """
+
+    text: str
+    kind: str
+    #: Characters dropped because the face had no glyph for them.
+    dropped: str = ""
+
+
+class Corpus:
+    """Samples text, then projects it onto what a given face can draw."""
+
+    def __init__(self, config: CorpusConfig | None = None) -> None:
+        self.config = config or CorpusConfig()
+        unknown = set(self.config.kinds) - set(CONTENT_KINDS)
+        if unknown:
+            raise ValueError(f"unknown content kinds: {sorted(unknown)}")
+        unknown_casing = set(self.config.casing) - {"as_is", "title", "upper", "lower"}
+        if unknown_casing:
+            raise ValueError(f"unknown casing transforms: {sorted(unknown_casing)}")
+
+    def sample(self, rng: random.Random, covered: frozenset[int] | None = None) -> TextSample:
+        """Draw one piece of text, restricted to codepoints in ``covered``."""
+        kind = _weighted_choice(rng, self.config.kinds)
+        text = self._generate(rng, kind)
+        text = _apply_casing(rng, text, self.config.casing, kind)
+        if covered is None:
+            return TextSample(text=text, kind=kind)
+        projected, dropped = _project(text, covered)
+        visible = projected.replace(" ", "")
+        # A single stray glyph left over from a stripped sentence is a worse
+        # sample than honest random letters; a genuinely single-character sample
+        # (a bare digit, say) loses nothing and is left alone.
+        if not visible or (dropped and len(visible) < 2):
+            return TextSample(text=_fallback(rng, covered), kind="fallback", dropped=dropped)
+        return TextSample(text=projected, kind=kind, dropped=dropped)
+
+    def _generate(self, rng: random.Random, kind: str) -> str:
+        match kind:
+            case "word":
+                return rng.choice(VOCABULARY)
+            case "phrase":
+                count = self.config.words.sample_int(rng)
+                return " ".join(rng.choices(VOCABULARY, k=max(1, count)))
+            case "sentence":
+                count = max(2, self.config.words.sample_int(rng) + 2)
+                words = rng.choices(VOCABULARY, k=count)
+                body = " ".join(words)
+                if count > 3 and rng.random() < 0.4:
+                    comma_at = rng.randrange(1, count - 1)
+                    parts = body.split(" ")
+                    parts[comma_at] += ","
+                    body = " ".join(parts)
+                return body[0].upper() + body[1:] + rng.choice(_TERMINALS)
+            case "number":
+                style = rng.random()
+                if style < 0.4:
+                    return str(rng.randrange(0, 1000))
+                if style < 0.7:
+                    return f"{rng.randrange(1000, 10_000_000):,}"
+                if style < 0.85:
+                    return f"{rng.uniform(0, 100):.{rng.randint(1, 2)}f}"
+                return f"{rng.uniform(0, 100):.0f}%"
+            case "price":
+                currency = rng.choice(_CURRENCIES)
+                amount = f"{rng.uniform(1, 5000):,.2f}"
+                return f"{currency}{amount}" if rng.random() < 0.7 else f"{amount} {currency}"
+            case "date":
+                day, month, year = rng.randint(1, 28), rng.choice(_MONTHS), rng.randint(1950, 2035)
+                style = rng.random()
+                if style < 0.4:
+                    return f"{day} {month} {year}"
+                if style < 0.7:
+                    return f"{month} {day}, {year}"
+                return f"{day:02d}/{rng.randint(1, 12):02d}/{year}"
+            case "time":
+                hour, minute = rng.randint(0, 23), rng.randint(0, 59)
+                if rng.random() < 0.6:
+                    return f"{hour:02d}:{minute:02d}"
+                suffix = rng.choice(("AM", "PM", "am", "pm"))
+                return f"{hour % 12 or 12}:{minute:02d} {suffix}"
+            case "token":
+                prefix = rng.choice(_TOKEN_PREFIXES)
+                digits = "".join(str(rng.randrange(10)) for _ in range(rng.randint(3, 6)))
+                separator = rng.choice(("-", "-", "_", " ", ""))
+                return f"{prefix}{separator}{digits}"
+        raise ValueError(f"unhandled content kind: {kind}")
+
+
+def _weighted_choice(rng: random.Random, weights: dict[str, float]) -> str:
+    usable = {key: weight for key, weight in weights.items() if weight > 0}
+    if not usable:
+        raise ValueError("all weights are zero")
+    keys = sorted(usable)
+    return rng.choices(keys, weights=[usable[key] for key in keys], k=1)[0]
+
+
+def _apply_casing(
+    rng: random.Random, text: str, weights: dict[str, float], kind: str
+) -> str:
+    if kind in {"number", "price", "date", "time", "token"}:
+        # Casing is meaningless or destructive for these — "12 MAR" is fine but
+        # lowercasing a token label is not what the corpus meant to vary.
+        return text
+    match _weighted_choice(rng, weights):
+        case "title":
+            return text.title()
+        case "upper":
+            return text.upper()
+        case "lower":
+            return text.lower()
+        case _:
+            return text
+
+
+def _project(text: str, covered: frozenset[int]) -> tuple[str, str]:
+    """Drop characters the face cannot draw, returning ``(kept, dropped)``.
+
+    Gaps left behind are closed up, so a partially stripped phrase does not come
+    out riddled with runs of spaces.
+    """
+    kept: list[str] = []
+    dropped: dict[str, None] = {}
+    for char in text:
+        if char == " " or ord(char) in covered:
+            kept.append(char)
+        else:
+            dropped[char] = None
+    return " ".join("".join(kept).split()), "".join(dropped)
+
+
+def _fallback(rng: random.Random, covered: frozenset[int]) -> str:
+    """A short string built only from characters the face is known to have."""
+    usable = sorted(
+        char for char in (chr(code) for code in covered) if char.isalnum() and char.isascii()
+    )
+    if not usable:
+        raise ValueError("face covers no usable characters")
+    return "".join(rng.choices(usable, k=rng.randint(3, 8)))
