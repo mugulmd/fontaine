@@ -12,9 +12,11 @@ wheels/
 # Data and generated streams
 data/
 
-# Fonts you drop in (keep the dir, not the files)
+# Assets you drop in (keep the dirs, not the files)
 assets/fonts/*
 !assets/fonts/.gitkeep
+assets/backgrounds/*
+!assets/backgrounds/.gitkeep
 
 # Presentation decks
 .data/

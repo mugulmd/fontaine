@@ -145,7 +145,7 @@ class BackgroundConfig:
         default_factory=lambda: {"photo": 6.0, "gradient": 2.0, "solid": 2.0}
     )
     #: Directory of PNG images to crop patches from. Scanned recursively.
-    photo_dir: Path = Path("data/backgrounds")
+    photo_dir: Path = Path("assets/backgrounds")
     #: Patch size relative to the canvas before being resampled to fit: above 1
     #: zooms out to finer texture, below 1 zooms in to smoother gradients.
     photo_scale: Range = Range(0.5, 3.0)

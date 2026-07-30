@@ -69,7 +69,7 @@ render:
       photo: 6.0        # dropped and the rest renormalized if photo_dir is empty
       gradient: 2.0
       solid: 2.0
-    photo_dir: data/backgrounds
+    photo_dir: assets/backgrounds
     # Patch size relative to the canvas before resampling to fit: above 1 zooms
     # out to finer texture, below 1 zooms in to smoother gradients.
     photo_scale: [0.5, 3.0]

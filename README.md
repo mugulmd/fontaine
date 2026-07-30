@@ -21,7 +21,7 @@ Two directories you fill in:
 - `assets/fonts/` — the fonts that make up the label space (`.ttf`, `.otf`, also
   `.ttc`; scanned recursively). Nothing outside it is ever read, so the font
   universe is exactly what you put there.
-- `data/backgrounds/` — PNGs to crop background patches from. Optional: with the
+- `assets/backgrounds/` — PNGs to crop background patches from. Optional: with the
   directory empty, generation falls back to synthetic canvases.
 
 `configs/stream.yaml` is the single config describing a whole stream, and every
