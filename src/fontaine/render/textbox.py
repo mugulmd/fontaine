@@ -54,6 +54,8 @@ class RenderError(RuntimeError):
 
 @dataclass(slots=True)
 class RenderedCrop:
+    """A finished crop, and the full record of how it was made."""
+
     image: Image.Image
     metadata: dict[str, Any]
 
@@ -66,6 +68,7 @@ class CropRenderer:
         self.corpus = corpus or Corpus(self.config.corpus)
 
     def render(self, face: FontFace, rng: random.Random) -> RenderedCrop:
+        """Draw one crop in ``face``, drawing every choice from ``rng``."""
         typography = self.config.typography
         crop_config = self.config.crop
 
@@ -254,16 +257,16 @@ class _Layout:
 
 
 def _layout(font: ImageFont.FreeTypeFont, text: str, spacing: float) -> _Layout:
-    box = font.getbbox(text)
+    left, top, right, bottom = (round(value) for value in font.getbbox(text))
     # getlength is the pen advance, which exceeds the ink box for a trailing
     # space or a glyph with right bearing; take whichever is wider.
     advance = font.getlength(text) + spacing * max(0, len(text) - 1)
-    width = max(box[2], math.ceil(advance)) - min(0, box[0])
+    width = max(right, math.ceil(advance)) - min(0, left)
     return _Layout(
-        width=max(1, math.ceil(width)),
-        height=max(1, box[3] - box[1]),
-        offset_x=box[0],
-        offset_y=box[1],
+        width=max(1, width),
+        height=max(1, bottom - top),
+        offset_x=left,
+        offset_y=top,
     )
 
 

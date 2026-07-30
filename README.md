@@ -139,15 +139,25 @@ with no branching on its side.
 from fontaine.store.reader import read_stream
 
 for sample in read_stream(Path("data/streams/v1")):
-    prediction = model.predict(sample.image)   # predict before seeing the label
-    model.learn(sample.image, sample.label)    # then learn from it
+    prediction = model.predict(sample.image)  # predict before seeing the label
+    model.learn(sample.image, sample.label)  # then learn from it
 ```
 
-## Tests
+## Tests and checks
 
 ```sh
-uv run pytest
+uv run pytest        # 98 tests, well under a second
+uv run ruff format   # formatting
+uv run ruff check    # linting
+uv run ty check      # type checking
 ```
 
 Registry tests build their own minimal fonts with `fontTools`, so they assert on
 known glyph coverage and pass without depending on `assets/fonts/`.
+
+Ruff runs with docstring checks on, since this codebase explains *why* it does
+things and that only stays true if it is enforced. Two rule groups are switched
+off deliberately, with the reasons recorded in `pyproject.toml`: `D401` (accessors
+are documented as the noun they return) and `RUF001`-`RUF003` (the ambiguous
+characters are the point — the charset presets need real curly quotes and dashes
+as glyphs to test coverage against).

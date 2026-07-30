@@ -11,13 +11,11 @@ import math
 import random
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 import yaml
 
 from fontaine.contracts import LabelGranularity
-
-T = TypeVar("T")
 
 DEFAULT_CONFIG_PATH = Path("configs/stream.yaml")
 
@@ -35,12 +33,15 @@ class Range:
 
     @property
     def fixed(self) -> bool:
+        """Whether the interval is a single value, making sampling a no-op."""
         return self.lo == self.hi
 
     def sample(self, rng: random.Random) -> float:
+        """A value drawn uniformly from the interval."""
         return self.lo if self.fixed else rng.uniform(self.lo, self.hi)
 
     def sample_int(self, rng: random.Random) -> int:
+        """A whole number drawn uniformly from the interval, both ends included."""
         return int(self.lo) if self.fixed else rng.randint(int(self.lo), int(self.hi))
 
     def sample_log(self, rng: random.Random) -> float:
@@ -200,6 +201,8 @@ class DegradeConfig:
 
 @dataclass(slots=True)
 class RenderConfig:
+    """Everything that goes into drawing one crop."""
+
     corpus: CorpusConfig = field(default_factory=CorpusConfig)
     typography: TypographyConfig = field(default_factory=TypographyConfig)
     background: BackgroundConfig = field(default_factory=BackgroundConfig)
@@ -238,13 +241,16 @@ def _coerce(value: Any, declared: Any, *, context: str) -> Any:
         return tuple(value)
     if get_origin(declared) is dict:
         _, value_type = get_args(declared)
-        return {key: _coerce(item, value_type, context=f"{context}.{key}") for key, item in value.items()}
+        return {
+            key: _coerce(item, value_type, context=f"{context}.{key}")
+            for key, item in value.items()
+        }
     return value
 
 
-def _build(cls: type[T], data: dict[str, Any], *, context: str) -> T:
+def _build[T](cls: type[T], data: dict[str, Any], *, context: str) -> T:
     hints = get_type_hints(cls)
-    known = {field.name for field in fields(cls)}  # type: ignore[arg-type]
+    known = {field.name for field in fields(cls)}  # ty: ignore[invalid-argument-type]
     unknown = set(data) - known
     if unknown:
         raise ValueError(f"unknown keys in {context}: {sorted(unknown)}")

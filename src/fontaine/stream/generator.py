@@ -8,9 +8,9 @@ against a live one the same code path.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import islice
-from typing import Iterator
 
 from fontaine.config import StreamConfig
 from fontaine.contracts import Sample

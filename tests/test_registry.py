@@ -4,10 +4,10 @@ import string
 from pathlib import Path
 
 import pytest
+from synthetic_fonts import build_collection, build_font
 
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
-from synthetic_fonts import build_collection, build_font
 
 ALNUM = string.ascii_letters + string.digits
 

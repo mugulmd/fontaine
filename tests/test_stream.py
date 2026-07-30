@@ -5,6 +5,7 @@ import string
 from pathlib import Path
 
 import pytest
+from synthetic_fonts import build_font
 
 from fontaine.config import (
     ArrivalConfig,
@@ -20,7 +21,6 @@ from fontaine.config import (
 from fontaine.fonts import registry as font_registry
 from fontaine.store import reader, writer
 from fontaine.stream.generator import StreamGenerator
-from synthetic_fonts import build_font
 
 ALNUM = string.ascii_letters + string.digits
 
@@ -90,7 +90,7 @@ def test_generator_labels_at_family_granularity(font_dir: Path, stream_setup) ->
 
 
 def test_generator_rejects_an_empty_label_space(stream_setup) -> None:
-    settings, registry = stream_setup
+    settings, _ = stream_setup
     empty = font_registry.FontRegistry(faces=[])
     with pytest.raises(ValueError, match="empty label space"):
         StreamGenerator(settings, empty)
@@ -127,20 +127,22 @@ def test_replay_is_indistinguishable_from_live_generation(stream_setup, tmp_path
     assert [sample.label for sample in replayed] == [sample.label for sample in live]
     assert [sample.index for sample in replayed] == [sample.index for sample in live]
     assert all(
-        first.image.tobytes() == second.image.tobytes() for first, second in zip(live, replayed)
+        first.image.tobytes() == second.image.tobytes()
+        for first, second in zip(live, replayed, strict=True)
     )
 
 
-def test_replay_can_skip_decoding_images(stream_setup, tmp_path: Path) -> None:
+def test_annotations_can_be_replayed_without_decoding_images(stream_setup, tmp_path: Path) -> None:
     settings, registry = stream_setup
     directory = tmp_path / "stream"
     writer.write_stream(StreamGenerator(settings, registry), 8, directory)
 
-    samples = list(reader.read_stream(directory, with_images=False))
+    records = list(reader.read_annotations(directory))
 
-    assert len(samples) == 8
-    assert all(sample.image is None for sample in samples)
-    assert all(sample.label for sample in samples)
+    assert len(records) == 8
+    assert [record["index"] for record in records] == list(range(8))
+    assert all(record["label"] for record in records)
+    assert all(record["meta"]["cap_height_px"] for record in records)
 
 
 def test_manifest_records_config_registry_and_ground_truth(stream_setup, tmp_path: Path) -> None:

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import string
 from pathlib import Path
+from typing import Any
 
 import pytest
+from synthetic_fonts import build_font
 
 from fontaine.config import ArrivalConfig
 from fontaine.fonts import registry as font_registry
 from fontaine.stream.arrival import ArrivalProcess
-from synthetic_fonts import build_font
 
 ALNUM = string.ascii_letters + string.digits
 
@@ -26,8 +27,8 @@ def _pool(font_dir: Path, count: int = 12, *, families: int | None = None) -> li
     return font_registry.scan(font_dir, charset="ascii_alnum").faces
 
 
-def _process(faces: list, **overrides: object) -> ArrivalProcess:
-    return ArrivalProcess(faces, ArrivalConfig(**overrides), seed=0)  # type: ignore[arg-type]
+def _process(faces: list, **overrides: Any) -> ArrivalProcess:
+    return ArrivalProcess(faces, ArrivalConfig(**overrides), seed=0)
 
 
 def test_first_item_is_always_a_new_font(font_dir: Path) -> None:
@@ -155,7 +156,8 @@ def test_shuffling_changes_discovery_order_only(font_dir: Path) -> None:
     ordered = _process(faces, shuffle_pool=False, concentration=50.0)
     ordered.take(500)
 
-    discovery_order = sorted(ordered.stats.face_first_seen, key=ordered.stats.face_first_seen.get)  # type: ignore[arg-type]
+    first_seen = ordered.stats.face_first_seen
+    discovery_order = sorted(first_seen, key=lambda face_id: first_seen[face_id])
     assert discovery_order == [face.face_id for face in faces]
 
 

@@ -3,8 +3,10 @@ from __future__ import annotations
 import random
 import string
 from pathlib import Path
+from typing import Any
 
 import pytest
+from synthetic_fonts import build_font
 
 from fontaine.config import (
     BackgroundConfig,
@@ -19,21 +21,20 @@ from fontaine.contracts import FontFace
 from fontaine.fonts import registry as font_registry
 from fontaine.render.metrics import em_size_for_cap_height, load_font
 from fontaine.render.textbox import CropRenderer
-from synthetic_fonts import build_font
 
 ALNUM = string.ascii_letters + string.digits
 
 
-def _config(**overrides: object) -> RenderConfig:
+def _config(**overrides: Any) -> RenderConfig:
     """A deterministic, solid-background config: one variable at a time."""
-    defaults: dict[str, object] = {
+    defaults: dict[str, Any] = {
         "corpus": CorpusConfig(kinds={"word": 1.0}, casing={"as_is": 1.0}),
         "typography": TypographyConfig(cap_height_px=Range(24, 24)),
         "background": BackgroundConfig(sources={"solid": 1.0}, scrim_prob=0.0),
         "crop": CropConfig(pad=Range(0.0, 0.0)),
         "degrade": DegradeConfig(),
     }
-    return RenderConfig(**(defaults | overrides))  # type: ignore[arg-type]
+    return RenderConfig(**(defaults | overrides))
 
 
 @pytest.fixture
@@ -94,8 +95,12 @@ def test_negative_padding_clips_into_the_glyphs(face: FontFace) -> None:
 
 def test_cap_height_normalization_equalizes_apparent_size(font_dir: Path) -> None:
     """The point of sizing by cap height: absolute scale must not encode the label."""
-    build_font(font_dir / "tall.ttf", chars=ALNUM, family="Tall", subfamily="Regular", glyph_height=900)
-    build_font(font_dir / "short.ttf", chars=ALNUM, family="Short", subfamily="Regular", glyph_height=500)
+    build_font(
+        font_dir / "tall.ttf", chars=ALNUM, family="Tall", subfamily="Regular", glyph_height=900
+    )
+    build_font(
+        font_dir / "short.ttf", chars=ALNUM, family="Short", subfamily="Regular", glyph_height=500
+    )
     registry = font_registry.scan(font_dir, charset="ascii_alnum")
 
     heights = []

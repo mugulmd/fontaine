@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
-from fontTools.ttLib import TTCollection, TTFont
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib import TTCollection, TTFont
 
 UPEM = 1000
 
@@ -75,8 +75,8 @@ def _make_font(
     pen.lineTo((450, 0))
     pen.closePath()
     box = pen.glyph()
-    builder.setupGlyf({name: box for name in order})
-    builder.setupHorizontalMetrics({name: (500, 50) for name in order})
+    builder.setupGlyf(dict.fromkeys(order, box))
+    builder.setupHorizontalMetrics(dict.fromkeys(order, (500, 50)))
     builder.setupHorizontalHeader(ascent=800, descent=-200)
     builder.setupNameTable(
         {
@@ -91,5 +91,6 @@ def _make_font(
     builder.setupOS2(usWeightClass=weight, fsSelection=1 if italic else 0)
     builder.setupPost()
     if italic:
-        builder.font["head"].macStyle |= 1 << 1
+        head = builder.font["head"]
+        head.macStyle |= 1 << 1  # ty: ignore[unresolved-attribute]
     return builder.font

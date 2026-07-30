@@ -23,4 +23,60 @@ build-backend = "hatchling.build"
 packages = ["src/fontaine"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.16.0",
+    "ty>=0.0.65",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Presentation decks and their generator scripts are work products, not library code.
+extend-exclude = [".data"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # import sorting
+    "UP",     # pyupgrade — keep to modern syntax for the pinned Python
+    "B",      # bugbear — likely bugs and questionable constructs
+    "C4",     # comprehension rewrites
+    "SIM",    # simplifications
+    "RET",    # return-statement cleanups
+    "PTH",    # prefer pathlib over os.path
+    "PIE",    # misc lints
+    "PERF",   # obvious performance traps
+    "RUF",    # ruff's own rules
+    "D",      # docstrings — this codebase explains its reasoning, so keep them honest
+]
+ignore = [
+    "D100",   # module docstring: covered by D104/D103 where it matters
+    "D104",   # package __init__ files are deliberately empty
+    "D105",   # magic methods rarely need prose
+    "D107",   # __init__ is documented on the class
+    "D203",   # conflicts with D211
+    "D213",   # conflicts with D212
+    # Accessors are documented as the noun they return ("The em size that renders
+    # this face at ...") rather than as "Return the em size ...", which adds a
+    # word without adding information.
+    "D401",
+    # The ambiguous characters here are the point: the charset presets need real
+    # curly quotes and dashes as glyphs to test coverage against, and console
+    # output uses × and → deliberately.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests read as prose already; their names say what they check.
+"tests/*" = ["D101", "D102", "D103"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ty.src]
+include = ["src", "tests"]

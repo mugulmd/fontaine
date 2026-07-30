@@ -21,11 +21,13 @@ _LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
 
 
 def srgb_to_linear(channel: np.ndarray | float) -> np.ndarray | float:
+    """Undo the sRGB transfer curve, giving light-linear values."""
     array = np.asarray(channel, dtype=np.float64)
     return np.where(array <= 0.04045, array / 12.92, ((array + 0.055) / 1.055) ** 2.4)
 
 
 def linear_to_srgb(value: float) -> float:
+    """Re-apply the sRGB transfer curve to a light-linear value."""
     if value <= 0.0031308:
         return 12.92 * value
     return 1.055 * value ** (1 / 2.4) - 0.055
@@ -44,6 +46,7 @@ def luminance_map(patch: np.ndarray) -> np.ndarray:
 
 
 def mean_luminance(patch: np.ndarray) -> float:
+    """Average relative luminance over a patch."""
     return float(luminance_map(patch).mean())
 
 
@@ -128,7 +131,10 @@ def _hued_with_luminance(rng: random.Random, target: float) -> RGB:
         # Luminance is also linear along the path to white, so solve for the mix.
         mix = (target - ceiling) / (1.0 - ceiling) if ceiling < 1.0 else 0.0
         linear = base_linear + mix * (1.0 - base_linear)
-    return tuple(round(255 * linear_to_srgb(float(value))) for value in np.clip(linear, 0.0, 1.0))  # type: ignore[return-value]
+    red, green, blue = (
+        round(255 * linear_to_srgb(float(value))) for value in np.clip(linear, 0.0, 1.0)
+    )
+    return (red, green, blue)
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,4 +190,5 @@ def random_color(rng: random.Random) -> RGB:
     hue = rng.random()
     saturation = rng.betavariate(1.4, 3.0)
     value = rng.uniform(0.15, 1.0)
-    return tuple(round(255 * channel) for channel in colorsys.hsv_to_rgb(hue, saturation, value))  # type: ignore[return-value]
+    red, green, blue = colorsys.hsv_to_rgb(hue, saturation, value)
+    return (round(255 * red), round(255 * green), round(255 * blue))

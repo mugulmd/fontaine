@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import string
+from typing import Any
 
 import pytest
 
@@ -12,8 +13,8 @@ ASCII_ALNUM = frozenset(ord(char) for char in string.ascii_letters + string.digi
 FULL_ASCII = frozenset(range(32, 127))
 
 
-def _corpus(**overrides: object) -> Corpus:
-    return Corpus(CorpusConfig(**overrides))  # type: ignore[arg-type]
+def _corpus(**overrides: Any) -> Corpus:
+    return Corpus(CorpusConfig(**overrides))
 
 
 @pytest.mark.parametrize("kind", CONTENT_KINDS)

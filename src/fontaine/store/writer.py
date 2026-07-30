@@ -13,11 +13,11 @@ one line at a time without loading an index — the same way it is consumed live
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Callable
 
 from fontaine import config as config_module
 from fontaine.contracts import Sample
@@ -92,7 +92,7 @@ def write_stream(
     stats = generator.stats
     manifest = {
         "fontaine_version": _package_version(),
-        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "seed": generator.config.seed,
         "n_items": written,
         "shard_size": shard_size,

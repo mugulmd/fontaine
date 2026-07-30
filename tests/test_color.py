@@ -20,7 +20,9 @@ WHITE = (255, 255, 255)
 
 
 def test_black_on_white_is_the_maximum_ratio() -> None:
-    assert contrast_ratio(relative_luminance(BLACK), relative_luminance(WHITE)) == pytest.approx(21.0)
+    assert contrast_ratio(relative_luminance(BLACK), relative_luminance(WHITE)) == pytest.approx(
+        21.0
+    )
 
 
 def test_contrast_ratio_is_symmetric() -> None:

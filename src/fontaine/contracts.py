@@ -41,9 +41,11 @@ class FontFace:
     codepoints: frozenset[int] = field(repr=False, compare=False, default=frozenset())
 
     def label(self, granularity: LabelGranularity) -> str:
+        """This face's class name at the requested granularity."""
         return self.face_id if granularity == "face" else self.family_id
 
     def covers(self, text: str) -> bool:
+        """Whether every character of ``text`` has a glyph in this face."""
         return all(ord(char) in self.codepoints for char in text)
 
     def missing_from(self, text: str) -> str:
@@ -75,6 +77,7 @@ class FontFace:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FontFace:
+        """Rebuild a face from :meth:`to_dict` output."""
         return cls(
             face_id=data["face_id"],
             family_id=data["family_id"],

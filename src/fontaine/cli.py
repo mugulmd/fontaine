@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from PIL import Image
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -172,11 +173,9 @@ def preview(
         f"sources: {', '.join(sorted(sources))}"
     )
     if not images and "photo" in settings.render.background.sources:
-        console.print(
-            "no PNGs found, falling back to synthetic canvases", style="yellow"
-        )
+        console.print("no PNGs found, falling back to synthetic canvases", style="yellow")
 
-    cells: list[tuple[object, str]] = []
+    cells: list[tuple[Image.Image, str]] = []
     stats: Counter[str] = Counter()
     failures: list[str] = []
 
@@ -210,13 +209,15 @@ def preview(
             console.print(f"  {failure}", style="dim")
         raise typer.Exit(code=1)
 
-    sheet = contact_sheet(cells, columns=columns, cell_height=cell_height)  # type: ignore[arg-type]
+    sheet = contact_sheet(cells, columns=columns, cell_height=cell_height)
     out.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(out)
 
     console.print(f"{len(cells)} crops → [bold]{out}[/bold] ({sheet.width}×{sheet.height})")
     backgrounds = {key: value for key, value in stats.items() if not key.startswith("kind:")}
-    kinds = {key.removeprefix("kind:"): value for key, value in stats.items() if key.startswith("kind:")}
+    kinds = {
+        key.removeprefix("kind:"): value for key, value in stats.items() if key.startswith("kind:")
+    }
     console.print(f"backgrounds: {_summarize(backgrounds)}", style="dim")
     console.print(f"content kinds: {_summarize(kinds)}", style="dim")
     if failures:
@@ -227,9 +228,9 @@ def preview(
 def generate(
     config: ConfigOption = DEFAULT_CONFIG_PATH,
     count: Annotated[int, typer.Option("--count", "-n", help="How many items to write.")] = 10_000,
-    out: Annotated[
-        Path, typer.Option("--out", "-o", help="Stream directory to create.")
-    ] = Path("data/streams/v1"),
+    out: Annotated[Path, typer.Option("--out", "-o", help="Stream directory to create.")] = Path(
+        "data/streams/v1"
+    ),
     seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
     font_dir: FontDirOption = None,
     verbose: VerboseOption = False,
@@ -261,9 +262,7 @@ def generate(
         console=console,
     ) as progress:
         task = progress.add_task("generating", total=count)
-        report = write_stream(
-            generator, count, out, on_item=lambda _: progress.advance(task)
-        )
+        report = write_stream(generator, count, out, on_item=lambda _: progress.advance(task))
 
     console.print(
         f"[green]{report.n_items}[/green] items → [bold]{report.directory}[/bold], "
@@ -353,7 +352,9 @@ def _popularity_line(counts: dict[str, int], n_items: int) -> str:
 
 
 def _summarize(counts: dict[str, int]) -> str:
-    return "  ".join(f"{key} {value}" for key, value in sorted(counts.items(), key=lambda item: -item[1]))
+    return "  ".join(
+        f"{key} {value}" for key, value in sorted(counts.items(), key=lambda item: -item[1])
+    )
 
 
 def _faces_table(registry: font_registry.FontRegistry) -> Table:

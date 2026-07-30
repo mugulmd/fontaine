@@ -11,11 +11,12 @@ import logging
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from fontTools.ttLib import TTCollection, TTFont, TTLibError
 
@@ -98,12 +99,15 @@ class FontRegistry:
 
     @property
     def families(self) -> list[str]:
+        """The distinct families in the label space, in registry order."""
         return list(dict.fromkeys(face.family_id for face in self.faces))
 
     def by_face_id(self) -> dict[str, FontFace]:
+        """The kept faces, keyed by face id."""
         return {face.face_id: face for face in self.faces}
 
     def to_dict(self) -> dict[str, Any]:
+        """Serializable snapshot, including what was excluded and why."""
         return {
             "label_granularity": self.label_granularity,
             "charset": self.charset,
@@ -174,9 +178,7 @@ def _is_italic(font: TTFont) -> bool:
     if head is not None and getattr(head, "macStyle", 0) & _MAC_STYLE_ITALIC:
         return True
     post = font.get("post")
-    if post is not None and abs(getattr(post, "italicAngle", 0.0) or 0.0) > 0.5:
-        return True
-    return False
+    return post is not None and abs(getattr(post, "italicAngle", 0.0) or 0.0) > 0.5
 
 
 def _weight(font: TTFont, subfamily: str) -> int:
@@ -194,9 +196,10 @@ def _weight(font: TTFont, subfamily: str) -> int:
 
 def _codepoints(font: TTFont) -> frozenset[int]:
     try:
-        return frozenset(font.getBestCmap().keys())
+        cmap = font.getBestCmap()
     except (AttributeError, KeyError, TTLibError, AssertionError):
         return frozenset()
+    return frozenset(cmap) if cmap else frozenset()
 
 
 def _read_faces(path: Path) -> list[FontFace]:
@@ -260,7 +263,9 @@ def iter_font_files(font_dir: Path, exclude: tuple[str, ...] = ()) -> list[Path]
     return [
         path
         for path in paths
-        if not any(fnmatch(path.name, pattern) or fnmatch(str(path), pattern) for pattern in exclude)
+        if not any(
+            fnmatch(path.name, pattern) or fnmatch(str(path), pattern) for pattern in exclude
+        )
     ]
 
 

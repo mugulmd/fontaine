@@ -54,9 +54,13 @@ def contact_sheet(
         row, column = divmod(position, columns)
         x = padding + column * (cell_width + padding)
         y = padding + row * (cell_height + label_height + padding)
-        draw.rectangle((x, y, x + cell_width - 1, y + cell_height - 1), fill=CELL_BG, outline=BORDER)
+        draw.rectangle(
+            (x, y, x + cell_width - 1, y + cell_height - 1), fill=CELL_BG, outline=BORDER
+        )
         # Centre the crop in its cell so narrow ones do not read as left-aligned.
-        sheet.paste(image, (x + (cell_width - image.width) // 2, y + (cell_height - image.height) // 2))
+        sheet.paste(
+            image, (x + (cell_width - image.width) // 2, y + (cell_height - image.height) // 2)
+        )
         draw.text(
             (x, y + cell_height + 2),
             _truncate(draw, label, font, cell_width),
@@ -84,7 +88,10 @@ def _scale_to_height(image: Image.Image, height: int, max_width: int) -> tuple[I
 
 
 def _truncate(
-    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_width: int,
 ) -> str:
     if draw.textlength(text, font=font) <= max_width:
         return text

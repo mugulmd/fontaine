@@ -11,8 +11,9 @@ A stream that does not fit in memory is the normal case, not the exception.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from PIL import Image
 
@@ -47,11 +48,12 @@ def read_config(directory: Path) -> StreamConfig:
     return config_module.from_dict(read_manifest(directory)["config"], context="manifest")
 
 
-def read_stream(directory: Path, *, with_images: bool = True) -> Iterator[Sample]:
-    """Replay the stream in order.
+def read_annotations(directory: Path) -> Iterator[dict[str, Any]]:
+    """Replay the annotation records in order, without decoding any image.
 
-    ``with_images=False`` skips decoding the PNGs, for when only the labels and
-    metadata are wanted — scoring a discovery curve, say.
+    For passes that only need labels and metadata — scoring a discovery curve,
+    slicing error rates by cap height — where decoding every PNG would dominate
+    the runtime for nothing.
     """
     path = directory / ANNOTATIONS_NAME
     if not path.is_file():
@@ -59,18 +61,25 @@ def read_stream(directory: Path, *, with_images: bool = True) -> Iterator[Sample
 
     with path.open() as annotations:
         for line in annotations:
-            line = line.strip()
-            if not line:
-                continue
-            record = json.loads(line)
-            image: Image.Image | None = None
-            if with_images:
-                with Image.open(directory / record["image"]) as handle:
-                    # Load eagerly: the file handle closes when this block exits.
-                    image = handle.convert("RGB")
-            yield Sample(
-                index=record["index"],
-                image=image,  # type: ignore[arg-type]
-                label=record["label"],
-                metadata=record.get("meta", {}),
-            )
+            stripped = line.strip()
+            if stripped:
+                yield json.loads(stripped)
+
+
+def read_stream(directory: Path) -> Iterator[Sample]:
+    """Replay the stream in order, as the samples a live generator would yield.
+
+    Every sample carries its image. Use :func:`read_annotations` when the images
+    are not needed — this deliberately has no way to omit them, so a ``Sample``
+    always means the same thing whatever produced it.
+    """
+    for record in read_annotations(directory):
+        with Image.open(directory / record["image"]) as handle:
+            # Load eagerly: the file handle closes when this block exits.
+            image = handle.convert("RGB")
+        yield Sample(
+            index=record["index"],
+            image=image,
+            label=record["label"],
+            metadata=record.get("meta", {}),
+        )

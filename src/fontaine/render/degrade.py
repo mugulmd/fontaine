@@ -21,7 +21,9 @@ from PIL import Image, ImageFilter
 from fontaine.config import DegradeConfig
 
 
-def apply(rng: random.Random, image: Image.Image, config: DegradeConfig) -> tuple[Image.Image, dict[str, Any]]:
+def apply(
+    rng: random.Random, image: Image.Image, config: DegradeConfig
+) -> tuple[Image.Image, dict[str, Any]]:
     """Degrade ``image``, returning it with a record of what was applied.
 
     Order matters and mirrors a capture pipeline: geometry, then resolution loss,

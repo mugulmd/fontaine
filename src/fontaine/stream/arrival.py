@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Iterator, Sequence
 
 from fontaine.config import ArrivalConfig
 from fontaine.contracts import FontFace, LabelGranularity
@@ -61,6 +61,7 @@ class ArrivalStats:
     label_counts: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
+        """Serializable snapshot, for the stream manifest."""
         return {
             "n_items": self.n_items,
             "face_first_seen": self.face_first_seen,
@@ -100,9 +101,7 @@ class ArrivalProcess:
             # Discovery order should not be alphabetical, but it must be reproducible.
             self._rng.shuffle(self._pool)
 
-        self._decay = (
-            0.5 ** (1.0 / self.config.half_life) if self.config.half_life > 0 else 1.0
-        )
+        self._decay = 0.5 ** (1.0 / self.config.half_life) if self.config.half_life > 0 else 1.0
         self._active: list[FontFace] = []
         self._weights: list[float] = []
         self._step = 0
@@ -113,6 +112,7 @@ class ArrivalProcess:
             yield self.step()
 
     def take(self, count: int) -> list[Arrival]:
+        """Advance the process ``count`` steps and return them."""
         return [self.step() for _ in range(count)]
 
     @property
@@ -128,6 +128,7 @@ class ArrivalProcess:
         return self.config.concentration / (total + self.config.concentration)
 
     def step(self) -> Arrival:
+        """Draw the next item's face, introducing a new one or reusing a known one."""
         if self.exhausted or self._rng.random() >= self.new_font_probability():
             face = self._reuse()
             first_seen = False

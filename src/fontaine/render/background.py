@@ -67,6 +67,7 @@ def available_sources(config: BackgroundConfig) -> dict[str, float]:
 
 
 def count_images(config: BackgroundConfig) -> int:
+    """How many usable images sit in the configured photo directory."""
     return len(_image_paths(str(config.photo_dir)))
 
 
