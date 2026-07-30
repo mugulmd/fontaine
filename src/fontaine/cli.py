@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from fontaine.config import DEFAULT_CONFIG_PATH, StreamConfig, load_stream_config
+from fontaine.config import DEFAULT_CONFIG_PATH, Range, StreamConfig, load_stream_config
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
 from fontaine.render import background as background_module
@@ -37,6 +37,16 @@ FontDirOption = Annotated[
 VerboseOption = Annotated[
     bool, typer.Option("--verbose", help="Surface fontTools' per-table warnings.")
 ]
+
+
+def _parse_range(value: str, option: str) -> Range:
+    """Parse a ``LO:HI`` command-line override into a :class:`Range`."""
+    try:
+        low, high = (float(part) for part in value.split(":", 1))
+        return Range(low, high)
+    except ValueError as error:
+        console.print(f"[red]{option} expects LO:HI, e.g. 18:64 — got {value!r}[/red]")
+        raise typer.Exit(code=1) from error
 
 
 def _load(config: Path) -> StreamConfig:
@@ -137,6 +147,15 @@ def preview(
     columns: Annotated[int, typer.Option("--columns", help="Cells per row.")] = 6,
     cell_height: Annotated[int, typer.Option("--cell-height", help="Row height in pixels.")] = 56,
     seed: Annotated[int | None, typer.Option("--seed", help="Override the config's seed.")] = None,
+    cap_height: Annotated[
+        str | None,
+        typer.Option(
+            "--cap-height",
+            metavar="LO:HI",
+            help="Override the config's cap height range, e.g. 18:64. The quickest "
+            "knob for text that comes out too small.",
+        ),
+    ] = None,
     from_stream: Annotated[
         bool,
         typer.Option(
@@ -159,6 +178,8 @@ def preview(
         settings.fonts.font_dir = font_dir
     if seed is not None:
         settings.seed = seed
+    if cap_height is not None:
+        settings.render.typography.cap_height_px = _parse_range(cap_height, "--cap-height")
 
     registry = _scan(settings, verbose=verbose)
     if not registry.faces:

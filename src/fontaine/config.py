@@ -127,10 +127,14 @@ class CorpusConfig:
 class TypographyConfig:
     """How big and how tightly set the text is."""
 
-    #: Target cap height in pixels, log-sampled. Sizing by cap height rather than
+    #: Height of the capital letters in pixels. Sizing by cap height rather than
     #: em size keeps apparent size comparable across faces, so absolute scale
     #: cannot leak the label.
-    cap_height_px: Range = Range(8.0, 44.0)
+    #:
+    #: Log-sampled, so the median is ``sqrt(lo * hi)`` rather than the midpoint —
+    #: a range starting at 8 puts half the crops under 19px, which reads as
+    #: pixelated however sharply it was drawn.
+    cap_height_px: Range = Range(18.0, 64.0)
     #: Extra tracking between characters, as a fraction of cap height. Non-zero
     #: values switch rendering to a per-character path, so v1 leaves it off.
     letter_spacing: Range = Range(0.0, 0.0)

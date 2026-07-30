@@ -67,6 +67,19 @@ Renders a batch of crops to an annotated contact sheet — the fastest way to se
 what the config actually produces. Faces are taken in registry order and cycled,
 so a large enough count shows every font at least once.
 
+If the text comes out too small, `cap_height_px` is the knob, and `--cap-height`
+overrides it without editing the config:
+
+```sh
+uv run fontaine preview --cap-height 18:64
+```
+
+Two things to know when reading the sheet. The range is **log-sampled**, so its
+median is `sqrt(lo × hi)` and not the midpoint — `[8, 44]` puts half the crops
+under 19px. And the sheet scales every crop to `--cell-height` (56px by default)
+with nearest-neighbour, so small crops are shown blockier than they are; pass
+`--cell-height 28` to see them closer to their real size.
+
 Per item: sample a target cap height, resolve the em size giving it for this face,
 sample text, build a background, pick a text colour at a sampled contrast ratio,
 draw, then crop the tight ink box with independent per-side padding.

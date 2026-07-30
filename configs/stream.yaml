@@ -56,10 +56,15 @@ render:
       lower: 1.0
 
   typography:
-    # Target cap height in pixels, sampled log-uniformly. Sizing by cap height
-    # rather than em size keeps apparent size comparable across faces, so
-    # absolute scale cannot leak the label.
-    cap_height_px: [8, 44]
+    # Height of the capital letters in pixels — the main knob for how big the text
+    # comes out. Sizing by cap height rather than em size keeps apparent size
+    # comparable across faces, so absolute scale cannot leak the label.
+    #
+    # Sampled log-uniformly, so the *median* is sqrt(lo * hi), not the midpoint:
+    # [8, 44] puts half the crops under 19px and reads as pixelated, while
+    # [18, 64] centres on 34px. Lower the floor to make the task harder — small
+    # text is the hard regime — and raise it for crisper crops.
+    cap_height_px: [18, 64]
     # Tracking as a fraction of cap height. Non-zero switches to a per-character
     # drawing path that loses ligatures, so v1 leaves it off.
     letter_spacing: [0.0, 0.0]
