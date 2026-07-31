@@ -78,24 +78,45 @@ class FontsConfig:
 
 
 @dataclass(slots=True)
-class ArrivalConfig:
-    """Which font each arriving item uses, and when new fonts first appear.
+class FontRule:
+    """How often one font appears, and over which stretch of the stream.
 
-    The set of fonts is not declared up front: it is discovered as the stream
-    advances, which is the whole point of the exercise.
+    Everything is stated rather than emergent, so a stream is a designed
+    experiment: the imbalance and the arrival points are the ones you asked for,
+    not the ones a particular seed happened to produce.
     """
 
-    #: Concentration of the Chinese-restaurant process. Higher means new fonts
-    #: keep appearing for longer and popularity is spread more evenly; lower means
-    #: the stream settles onto a few fonts quickly.
-    concentration: float = 8.0
-    #: Half-life in items of a font's popularity, giving concept drift: a font
-    #: that stops appearing fades and can later come back. 0 disables forgetting,
-    #: leaving a plain rich-get-richer process whose discovery rate decays to zero.
-    half_life: int = 2000
-    #: Introduce fonts in a seed-shuffled order rather than registry order, so
-    #: discovery order is not alphabetical.
-    shuffle_pool: bool = True
+    #: Relative weight. ``None`` inherits :attr:`ArrivalConfig.default_weight`.
+    #: Probability is the weight divided by the total over the fonts active at
+    #: that point in the stream. Zero excludes the font entirely.
+    weight: float | None = None
+    #: First item at which the font may appear. Everything before this is drawn
+    #: as if the font did not exist, which is what makes a new class arrive
+    #: mid-stream at a point you chose.
+    start: int = 0
+    #: Item at which the font stops appearing, exclusive. ``None`` means never.
+    #: A class going away tests graceful degradation as much as one arriving
+    #: tests discovery.
+    stop: int | None = None
+
+
+@dataclass(slots=True)
+class ArrivalConfig:
+    """Which font each arriving item uses.
+
+    Uniform over the whole label space unless told otherwise: every font carries
+    ``default_weight`` and is available from the first item. Overrides in
+    :attr:`fonts` are what create imbalance and mid-stream change.
+    """
+
+    #: Weight for every font without a rule of its own.
+    default_weight: float = 1.0
+    #: Per-font overrides, keyed by face id or by a glob over face ids
+    #: (``"roboto:*"`` for a whole family). The most specific matching pattern
+    #: wins: an exact face id beats a glob, and a longer glob beats a shorter one.
+    #: A pattern matching no font is an error — a renamed font would otherwise
+    #: turn a designed experiment back into a uniform one without saying so.
+    fonts: dict[str, FontRule] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

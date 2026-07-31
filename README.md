@@ -5,8 +5,8 @@ Online font recognition over a stream of text-box crops.
 Two programs share one data contract:
 
 - **the generator** — synthesises an endless stream of image crops around text boxes,
-  each annotated with the font that drew it. Fonts are not all present at the start:
-  new ones keep appearing as the stream advances.
+  each annotated with the font that drew it. Which fonts appear, how often, and from
+  which item onwards are all things you state, so a stream is a designed experiment.
 - **the recognizer** (not built yet) — consumes that stream one item at a time,
   predicting before it is told the label, and discovering the font set as it goes.
 
@@ -103,27 +103,49 @@ A few decisions worth knowing about:
 
 ## The stream
 
-Which font each item uses is decided by a Chinese-restaurant process: at each step
-it either introduces a font never seen before, or reuses one already seen with
-probability proportional to that font's recent popularity. Three properties the
-recognizer has to deal with fall out of that:
+Which font each item uses is **uniform over the whole label space** by default:
+every font carries the same weight and is available from the first item. Two kinds
+of override in `configs/stream.yaml` turn that into an experiment:
 
-- **progressive discovery** — the font set is never declared up front,
-- **a long tail** — popularity is rich-get-richer, so a few fonts dominate and many
-  stay rare, which is far harder than a uniform draw,
-- **drift** — popularity is counted with exponential forgetting, so a font that
-  stops appearing fades and can come back later.
+```yaml
+arrival:
+  default_weight: 1.0
+  fonts:
+    "roboto:regular":  { weight: 5 }     # five times its fair share
+    "oswald:*":        { weight: 0.2 }   # whole family made rare
+    "lobster:regular": { start: 3000 }   # a new class arriving mid-stream
+    "anton:regular":   { stop: 2000 }    # an old class going away
+    "jetbrains-mono:regular": { weight: 0 }   # excluded entirely
+```
 
-`half_life` is what produces the third one, and it matters more than it looks. With
-forgetting off, the chance of a new font decays like 1/t and the stream ossifies —
-on a 437-face pool, plain CRP had found 76 fonts after 50k items and effectively
-stopped, while `half_life: 2000` reached 200 and was still discovering.
+- **weights** create imbalance, so a recognizer has to learn one class from a
+  handful of examples while another has thousands. A font's probability is its
+  weight over the total of the fonts *active at that point*, so retiring a font
+  redistributes its share over the rest automatically.
+- **start / stop** create concept drift at points you choose. A class arriving
+  mid-stream is what tests discovery; a class leaving tests whether the learner
+  degrades gracefully on something it stops seeing.
 
-Tune it without rendering anything:
+Both are deliberately *stated* rather than emergent. An earlier version drew
+popularity and arrival times from a Chinese-restaurant process, which meant the
+imbalance and the novelty points were whatever a given seed produced — you could
+only run it and see. Dictating them makes a stream a designed experiment, and has
+the side benefit that adding a font to `assets/fonts/` perturbs only what you say
+it perturbs instead of reshuffling the whole stream.
+
+Keys are face ids (as printed by `fontaine fonts scan`) or globs over them. The
+most specific match wins: an exact id beats a glob, a longer glob beats a shorter
+one. **A pattern matching no font is an error** — otherwise renaming a font would
+quietly turn a designed stream back into a uniform one.
+
+Check a schedule without rendering anything:
 
 ```sh
-uv run fontaine arrival -n 50000        # simulate only; runs in well under a second
+uv run fontaine arrival -n 50000    # simulate only; well under a second
 ```
+
+It prints the weight, window, realized share and first appearance per font, so you
+can confirm the stream is the one you intended before spending minutes on images.
 
 Then materialize a stream:
 
@@ -139,8 +161,11 @@ data/streams/v1/crops/00000/*.png  the crops, sharded by index
 ```
 
 The manifest is written last, so a directory with a manifest is a complete stream
-and an interrupted run cannot be mistaken for a finished one. It records
-`label_first_seen` per label, which is what you need to score discovery lag later.
+and an interrupted run cannot be mistaken for a finished one. It carries both halves
+of the ground truth: the resolved `schedule` (the item each font was *meant* to
+arrive at) and `label_first_seen` (the item it *actually* first appeared at). A rare
+font allowed from item 3000 may not be drawn until 3200, so scoring detection lag
+needs the former as the baseline.
 
 **The stream is an iterator, not a directory.** `StreamGenerator` yields
 `Sample`s lazily and `store.reader.read_stream` yields the identical objects from

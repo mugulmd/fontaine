@@ -37,7 +37,7 @@ def stream_setup(font_dir: Path) -> tuple[StreamConfig, font_registry.FontRegist
     settings = StreamConfig(
         seed=3,
         fonts=FontsConfig(font_dir=font_dir),
-        arrival=ArrivalConfig(concentration=6.0, half_life=100),
+        arrival=ArrivalConfig(),
         render=RenderConfig(
             corpus=CorpusConfig(kinds={"word": 1.0}, casing={"as_is": 1.0}),
             typography=TypographyConfig(cap_height_px=Range(14, 20)),
@@ -158,7 +158,7 @@ def test_manifest_records_config_registry_and_ground_truth(stream_setup, tmp_pat
 
     restored = reader.read_config(directory)
     assert restored.seed == settings.seed
-    assert restored.arrival.concentration == settings.arrival.concentration
+    assert restored.arrival.default_weight == settings.arrival.default_weight
     assert restored.render.typography.cap_height_px == settings.render.typography.cap_height_px
 
     label_space = reader.read_registry(directory)

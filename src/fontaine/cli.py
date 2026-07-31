@@ -20,7 +20,8 @@ from fontaine.render import background as background_module
 from fontaine.render.textbox import CropRenderer, RenderError
 from fontaine.rng import item_rng
 from fontaine.store.writer import write_stream
-from fontaine.stream.arrival import ArrivalProcess, ArrivalStats
+from fontaine.stream import arrival as arrival_module
+from fontaine.stream.arrival import ArrivalProcess, ScheduleError
 from fontaine.stream.generator import StreamGenerator
 from fontaine.viz.contact_sheet import contact_sheet
 
@@ -46,6 +47,27 @@ def _parse_range(value: str, option: str) -> Range:
         return Range(low, high)
     except ValueError as error:
         console.print(f"[red]{option} expects LO:HI, e.g. 18:64 — got {value!r}[/red]")
+        raise typer.Exit(code=1) from error
+
+
+def _arrivals(settings: StreamConfig, registry: font_registry.FontRegistry) -> ArrivalProcess:
+    try:
+        return ArrivalProcess(
+            registry.faces,
+            settings.arrival,
+            seed=settings.seed,
+            label_granularity=registry.label_granularity,
+        )
+    except ScheduleError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+
+
+def _generator(settings: StreamConfig, registry: font_registry.FontRegistry) -> StreamGenerator:
+    try:
+        return StreamGenerator(settings, registry)
+    except ValueError as error:  # ScheduleError included: an unusable config
+        console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1) from error
 
 
@@ -201,7 +223,7 @@ def preview(
     failures: list[str] = []
 
     if from_stream:
-        generator = StreamGenerator(settings, registry)
+        generator = _generator(settings, registry)
         for sample in generator.take(count):
             stats[sample.metadata["background"]] += 1
             stats[f"kind:{sample.metadata['text_kind']}"] += 1
@@ -268,12 +290,8 @@ def generate(
         console.print("[red]empty label space — nothing to generate[/red]")
         raise typer.Exit(code=1)
 
-    generator = StreamGenerator(settings, registry)
-    console.print(
-        f"{len(registry.faces)} faces available, seed {settings.seed}, "
-        f"concentration {settings.arrival.concentration}, half-life "
-        f"{settings.arrival.half_life or 'off'}"
-    )
+    generator = _generator(settings, registry)
+    console.print(f"seed {settings.seed} — {arrival_module.describe(generator.arrivals.schedule)}")
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -292,7 +310,7 @@ def generate(
     )
     if report.n_skipped:
         console.print(f"[yellow]{report.n_skipped} items skipped[/yellow]")
-    console.print(_discovery_table(generator.stats, report.n_items, len(registry.labels)))
+    console.print(_schedule_table(generator.arrivals, report.n_items))
     console.print(_popularity_line(generator.stats.label_counts, report.n_items), style="dim")
 
 
@@ -309,7 +327,8 @@ def arrival(
     """Simulate the arrival process without rendering anything.
 
     Nothing is drawn, so this runs in a fraction of a second — the cheap way to
-    tune concentration and half-life against the discovery curve you want.
+    check that the weights and schedules produce the stream you intended before
+    spending minutes generating images.
     """
     settings = _load(config)
     if font_dir is not None:
@@ -322,41 +341,52 @@ def arrival(
         console.print("[red]empty label space — nothing to simulate[/red]")
         raise typer.Exit(code=1)
 
-    process = ArrivalProcess(
-        registry.faces,
-        settings.arrival,
-        seed=settings.seed,
-        label_granularity=registry.label_granularity,
-    )
+    process = _arrivals(settings, registry)
     process.take(count)
 
-    console.print(
-        f"{count} steps over {len(registry.faces)} faces — "
-        f"concentration {settings.arrival.concentration}, half-life "
-        f"{settings.arrival.half_life or 'off'}"
-    )
-    console.print(_discovery_table(process.stats, count, len(registry.labels)))
+    console.print(f"{count:,} steps — {arrival_module.describe(process.schedule)}")
+    console.print(_schedule_table(process, count))
     console.print(_popularity_line(process.stats.label_counts, count), style="dim")
-    if not process.exhausted:
-        remaining = len(registry.faces) - len(process.stats.face_first_seen)
+
+    missing = [
+        plan.face_id
+        for plan in process.schedule
+        if plan.weight > 0 and plan.face_id not in process.stats.face_counts
+    ]
+    if missing:
         console.print(
-            f"[yellow]{remaining} faces never appeared[/yellow] — raise concentration, "
-            f"lengthen the stream, or shorten the half-life",
+            f"[yellow]{len(missing)} font(s) never appeared[/yellow] despite a non-zero "
+            f"weight: {', '.join(missing[:4])}{' ...' if len(missing) > 4 else ''} — "
+            f"lengthen the stream, raise their weight, or check their start",
+            style="yellow",
         )
 
 
-def _discovery_table(stats: ArrivalStats, n_items: int, n_labels: int) -> Table:
-    """How much of the label space had been discovered by each point in the stream."""
-    table = Table(title="discovery", title_justify="left", header_style="bold")
-    table.add_column("by item", justify="right")
-    table.add_column("labels seen", justify="right")
+def _schedule_table(process: ArrivalProcess, n_items: int) -> Table:
+    """What was asked for per font, beside what the run actually produced."""
+    table = Table(title="arrival schedule", title_justify="left", header_style="bold")
+    table.add_column("font", overflow="fold", style="cyan")
+    table.add_column("weight", justify="right")
+    table.add_column("window", justify="right")
     table.add_column("share", justify="right")
+    table.add_column("items", justify="right")
+    table.add_column("first seen", justify="right")
 
-    first_seen = sorted(stats.label_first_seen.values())
-    checkpoints = [point for point in (10, 100, 1_000, 10_000, 100_000) if point < n_items]
-    for point in [*checkpoints, n_items]:
-        seen = sum(1 for step in first_seen if step < point)
-        table.add_row(f"{point:,}", f"{seen}/{n_labels}", f"{seen / n_labels:.0%}")
+    counts = process.stats.face_counts
+    for plan in sorted(process.schedule, key=lambda item: (-item.weight, item.face_id)):
+        window = "all" if plan.start == 0 and plan.stop is None else f"{plan.start:,}-"
+        if plan.stop is not None:
+            window = f"{plan.start:,}-{plan.stop:,}"
+        seen = process.stats.face_first_seen.get(plan.face_id)
+        count = counts.get(plan.face_id, 0)
+        table.add_row(
+            plan.face_id,
+            f"{plan.weight:g}" if plan.weight else "[dim]0[/dim]",
+            window,
+            f"{count / n_items:.1%}" if n_items else "-",
+            f"{count:,}",
+            f"{seen:,}" if seen is not None else "[dim]never[/dim]",
+        )
     return table
 
 

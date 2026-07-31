@@ -99,6 +99,10 @@ def write_stream(
         "label_granularity": generator.registry.label_granularity,
         "config": config_module.to_dict(generator.config),
         "registry": generator.registry.to_dict(),
+        # The schedule is what was asked for; the stats are what happened. Both
+        # are needed to score detection lag against the item a class was meant to
+        # arrive at, rather than against the item it happened to first show up on.
+        "schedule": [plan.to_dict() for plan in generator.arrivals.schedule],
         "arrival": stats.to_dict(),
         "skipped": [
             {"index": item.index, "face_id": item.face_id, "error": item.error}

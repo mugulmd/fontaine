@@ -1,35 +1,62 @@
 """Which font each arriving item uses.
 
-The font set is not declared up front. At each step the process either introduces
-a font never seen before, or reuses one it has already seen with probability
-proportional to that font's recent popularity — a Chinese-restaurant process. Two
-properties fall out of that for free:
+Uniform over the label space by default: every font carries the same weight and is
+available from the first item. Two kinds of override, both stated in the config
+rather than emergent, turn that into an experiment:
 
-* **progressive discovery.** New fonts keep appearing as the stream advances,
-  which is what the recognizer has to cope with.
-* **a long tail.** Popularity is rich-get-richer, so a few fonts dominate and many
-  stay rare — much harder, and much more realistic, than a uniform draw.
+* **weights** make some fonts commoner than others, so a recognizer has to learn a
+  class from a handful of examples while another class has thousands.
+* **schedules** hold a font back until a chosen item, or retire it at one, so a
+  new class arrives — or an old one leaves — at a point known in advance.
 
-``half_life`` adds the third property, **drift**: popularity is counted with
-exponential forgetting, so a font that stops appearing fades out and can come
-back later. It also keeps discovery going indefinitely — without forgetting, the
-probability of a new font decays like 1/t and the stream ossifies.
+Both exist to be *dictated*. A process that produced imbalance and arrival times
+by itself would leave you measuring whatever a particular seed happened to do,
+where what you want is to fix the conditions and measure the algorithm.
 
-Unlike the render, this process is inherently sequential: what appears next
-depends on what came before. It is driven by its own generator seeded from the
-base seed, so the label sequence can be replayed cheaply — without rendering
-anything — while per-item render parameters stay independently reproducible.
+The process is sequential — the active set changes as the stream advances — but it
+depends only on the item index, so the whole label sequence can be replayed
+cheaply without rendering anything.
 """
 
 from __future__ import annotations
 
-import math
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 
-from fontaine.config import ArrivalConfig
+from fontaine.config import ArrivalConfig, FontRule
 from fontaine.contracts import FontFace, LabelGranularity
+
+
+class ScheduleError(ValueError):
+    """Raised when a configured schedule cannot produce a stream."""
+
+
+@dataclass(frozen=True, slots=True)
+class FontSchedule:
+    """The resolved plan for one font: the experiment as the process will run it."""
+
+    face_id: str
+    weight: float
+    start: int
+    stop: int | None
+    #: The config pattern this came from, or ``None`` where the default applied.
+    pattern: str | None
+
+    def active_at(self, index: int) -> bool:
+        """Whether this font can be drawn for the item at ``index``."""
+        return self.weight > 0 and self.start <= index and (self.stop is None or index < self.stop)
+
+    def to_dict(self) -> dict[str, object]:
+        """Serializable view, for the stream manifest."""
+        return {
+            "face_id": self.face_id,
+            "weight": self.weight,
+            "start": self.start,
+            "stop": self.stop,
+            "pattern": self.pattern,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +66,8 @@ class Arrival:
     index: int
     face: FontFace
     #: True when this face has never appeared before — the novelty ground truth.
+    #: Note this is the first *actual* appearance, which for a rare font can fall
+    #: well after the item its schedule allowed it from.
     first_seen: bool
     #: True when this face's *label* has never appeared before. Differs from
     #: ``first_seen`` at family granularity, where a new face of a known family
@@ -53,7 +82,7 @@ class ArrivalStats:
     """Ground truth about a run of the process, for scoring discovery later."""
 
     n_items: int = 0
-    #: Step at which each face and each label first appeared.
+    #: Step at which each face and each label first actually appeared.
     face_first_seen: dict[str, int] = field(default_factory=dict)
     label_first_seen: dict[str, int] = field(default_factory=dict)
     #: Total appearances per face and per label.
@@ -71,12 +100,68 @@ class ArrivalStats:
         }
 
 
-class ArrivalProcess:
-    """Draws faces from a pool, discovering them progressively.
+def resolve_schedule(
+    faces: Sequence[FontFace], config: ArrivalConfig | None = None
+) -> tuple[FontSchedule, ...]:
+    """Apply the config's rules to a label space, giving one plan per font.
 
-    Iterating is infinite; the pool bounds how many *distinct* faces can appear,
-    not how many items.
+    Raises :class:`ScheduleError` for a pattern that matches nothing, since the
+    alternative is an experiment that quietly stopped being the one you designed.
     """
+    settings = config or ArrivalConfig()
+    if settings.default_weight < 0:
+        raise ScheduleError(f"default_weight cannot be negative: {settings.default_weight}")
+
+    matched: set[str] = set()
+    schedules: list[FontSchedule] = []
+    for face in faces:
+        pattern = _best_pattern(face.face_id, settings.fonts)
+        rule = settings.fonts[pattern] if pattern is not None else FontRule()
+        if pattern is not None:
+            matched.add(pattern)
+        weight = settings.default_weight if rule.weight is None else rule.weight
+        _validate(face.face_id, weight, rule)
+        schedules.append(
+            FontSchedule(
+                face_id=face.face_id,
+                weight=float(weight),
+                start=rule.start,
+                stop=rule.stop,
+                pattern=pattern,
+            )
+        )
+
+    unmatched = sorted(set(settings.fonts) - matched)
+    if unmatched:
+        raise ScheduleError(
+            f"arrival rules match no font: {unmatched} — check for a renamed font "
+            f"or a mistyped face id (run `fontaine fonts scan` for the real ones)"
+        )
+    return tuple(schedules)
+
+
+def _best_pattern(face_id: str, rules: dict[str, FontRule]) -> str | None:
+    """The most specific pattern matching ``face_id``: exact first, then longest."""
+    candidates = [pattern for pattern in rules if fnmatchcase(face_id, pattern)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda pattern: (pattern == face_id, len(pattern)))
+
+
+def _validate(face_id: str, weight: float, rule: FontRule) -> None:
+    if weight < 0:
+        raise ScheduleError(f"{face_id}: weight cannot be negative ({weight})")
+    if rule.start < 0:
+        raise ScheduleError(f"{face_id}: start cannot be negative ({rule.start})")
+    if rule.stop is not None and rule.stop <= rule.start:
+        raise ScheduleError(
+            f"{face_id}: stop ({rule.stop}) must be after start ({rule.start}), "
+            f"otherwise the font never appears at all"
+        )
+
+
+class ArrivalProcess:
+    """Draws faces according to the resolved schedule. Iterating is infinite."""
 
     def __init__(
         self,
@@ -87,25 +172,20 @@ class ArrivalProcess:
         label_granularity: LabelGranularity = "face",
     ) -> None:
         if not faces:
-            raise ValueError("the arrival process needs at least one face")
+            raise ScheduleError("the arrival process needs at least one face")
         self.config = config or ArrivalConfig()
-        if self.config.concentration <= 0:
-            raise ValueError(f"concentration must be positive: {self.config.concentration}")
-        if self.config.half_life < 0:
-            raise ValueError(f"half_life cannot be negative: {self.config.half_life}")
-
         self.label_granularity = label_granularity
-        self._rng = random.Random(f"fontaine:arrival:{seed}")
-        self._pool = list(faces)
-        if self.config.shuffle_pool:
-            # Discovery order should not be alphabetical, but it must be reproducible.
-            self._rng.shuffle(self._pool)
-
-        self._decay = 0.5 ** (1.0 / self.config.half_life) if self.config.half_life > 0 else 1.0
-        self._active: list[FontFace] = []
-        self._weights: list[float] = []
-        self._step = 0
+        self.schedule = resolve_schedule(faces, self.config)
         self.stats = ArrivalStats()
+
+        self._faces = {face.face_id: face for face in faces}
+        self._rng = random.Random(f"fontaine:arrival:{seed}")
+        self._step = 0
+        self._active: list[FontFace] = []
+        self._cumulative: list[float] = []
+        self._next_change: int | None = None
+        # Fail on an unusable schedule now rather than on the first draw.
+        self._refresh()
 
     def __iter__(self) -> Iterator[Arrival]:
         while True:
@@ -116,27 +196,24 @@ class ArrivalProcess:
         return [self.step() for _ in range(count)]
 
     @property
-    def exhausted(self) -> bool:
-        """True once every face in the pool has appeared at least once."""
-        return len(self._active) == len(self._pool)
+    def active(self) -> tuple[FontSchedule, ...]:
+        """The schedules in force for the next item."""
+        return tuple(plan for plan in self.schedule if plan.active_at(self._step))
 
-    def new_font_probability(self) -> float:
-        """Chance the next item introduces a face never seen before."""
-        if self.exhausted:
-            return 0.0
-        total = math.fsum(self._weights)
-        return self.config.concentration / (total + self.config.concentration)
+    def shares(self) -> dict[str, float]:
+        """The probability of each font for the next item, by face id."""
+        active = self.active
+        total = sum(plan.weight for plan in active)
+        return {plan.face_id: plan.weight / total for plan in active} if total else {}
 
     def step(self) -> Arrival:
-        """Draw the next item's face, introducing a new one or reusing a known one."""
-        if self.exhausted or self._rng.random() >= self.new_font_probability():
-            face = self._reuse()
-            first_seen = False
-        else:
-            face = self._introduce()
-            first_seen = True
+        """Draw the next item's face."""
+        if self._next_change is not None and self._step >= self._next_change:
+            self._refresh()
 
+        face = self._rng.choices(self._active, cum_weights=self._cumulative, k=1)[0]
         label = face.label(self.label_granularity)
+        first_seen = face.face_id not in self.stats.face_first_seen
         label_first_seen = label not in self.stats.label_first_seen
         if first_seen:
             self.stats.face_first_seen[face.face_id] = self._step
@@ -151,41 +228,48 @@ class ArrivalProcess:
             face=face,
             first_seen=first_seen,
             label_first_seen=label_first_seen,
-            n_seen=len(self._active),
+            n_seen=len(self.stats.face_first_seen),
         )
         self._step += 1
         return arrival
 
-    def _introduce(self) -> FontFace:
-        face = self._pool[len(self._active)]
-        self._forget()
-        self._active.append(face)
-        self._weights.append(1.0)
-        return face
+    def _refresh(self) -> None:
+        """Recompute the active set and the next step at which it changes.
 
-    def _reuse(self) -> FontFace:
-        position = self._rng.choices(range(len(self._active)), weights=self._weights, k=1)[0]
-        self._forget()
-        self._weights[position] += 1.0
-        return self._active[position]
-
-    def _forget(self) -> None:
-        """Decay every popularity weight one step, before the new arrival counts.
-
-        With ``half_life`` set, total weight saturates near ``half_life / ln 2``
-        instead of growing with the stream, which is what keeps the rate of new
-        fonts from decaying to nothing.
+        Cumulative weights are built once per change rather than once per item, so
+        a draw costs a binary search however many fonts are in play.
         """
-        if self._decay == 1.0:
-            return
-        self._weights = [weight * self._decay for weight in self._weights]
+        active = [plan for plan in self.schedule if plan.active_at(self._step)]
+        if not active:
+            raise ScheduleError(
+                f"no font is scheduled to appear at item {self._step}: every font is "
+                f"either weighted zero or outside its start/stop window"
+            )
+        self._active = [self._faces[plan.face_id] for plan in active]
+        total = 0.0
+        self._cumulative = []
+        for plan in active:
+            total += plan.weight
+            self._cumulative.append(total)
 
-    def popularity(self) -> dict[str, float]:
-        """Current recency-weighted share per face — the drifting distribution."""
-        total = math.fsum(self._weights)
-        if total <= 0:
-            return {}
-        return {
-            face.face_id: weight / total
-            for face, weight in zip(self._active, self._weights, strict=True)
+        boundaries = {plan.start for plan in self.schedule if plan.start > self._step}
+        boundaries |= {
+            plan.stop for plan in self.schedule if plan.stop is not None and plan.stop > self._step
         }
+        self._next_change = min(boundaries) if boundaries else None
+
+
+def describe(schedule: Sequence[FontSchedule]) -> str:
+    """A one-line summary of how far a schedule departs from uniform."""
+    weights = {plan.weight for plan in schedule}
+    parts = [
+        f"{len(schedule)} fonts",
+        "uniform weights" if len(weights) == 1 else f"{len(weights)} distinct weights",
+    ]
+    timed = sum(1 for plan in schedule if plan.start > 0 or plan.stop is not None)
+    if timed:
+        parts.append(f"{timed} scheduled")
+    excluded = sum(1 for plan in schedule if plan.weight == 0)
+    if excluded:
+        parts.append(f"{excluded} excluded")
+    return ", ".join(parts)
