@@ -1,5 +1,14 @@
 # fontaine
 
+> [!WARNING]
+> AI DISCLAIMER: this repository is still a work in progress,
+> currently entirely written by claude-code.
+> Human review is incoming, likely with changes in the CLI,
+> parts of the code architecture and the documentation.
+> Stay tuned!
+
+---
+
 Online font recognition over a stream of text-box crops.
 
 Two programs share one data contract:
