@@ -377,9 +377,6 @@ def recognize(
     count: Annotated[
         int, typer.Option("--count", "-n", help="Items to evaluate when generating live.")
     ] = 5_000,
-    model_name: Annotated[
-        str, typer.Option("--model", "-m", help=f"One of: {', '.join(model_module.MODELS)}.")
-    ] = model_module.DEFAULT_MODEL,
     limit: Annotated[
         int | None, typer.Option("--limit", help="Stop after this many items of a saved stream.")
     ] = None,
@@ -394,12 +391,6 @@ def recognize(
     Reads a saved stream with ``--stream``, or generates one on the fly from the
     config. Both paths hand the model the same items, so the numbers are comparable.
     """
-    if model_name not in model_module.MODELS:
-        console.print(f"[red]unknown model {model_name!r}[/red]")
-        for name, description in model_module.MODELS.items():
-            console.print(f"  [cyan]{name}[/cyan] — {description}", style="dim")
-        raise typer.Exit(code=1)
-
     schedule: dict[str, int] | None = None
     if stream is not None:
         try:
@@ -430,8 +421,8 @@ def recognize(
         total = count
         source = f"generating live from [bold]{config}[/bold]"
 
-    console.print(f"{source} — model [cyan]{model_name}[/cyan], {total:,} items")
-    model = model_module.build(model_name)
+    console.print(f"{source} — {total:,} items")
+    model = model_module.build()
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),

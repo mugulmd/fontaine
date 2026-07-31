@@ -136,10 +136,9 @@ def test_slant_detects_a_sheared_rendering() -> None:
 # ---------------------------------------------------------------------- models
 
 
-@pytest.mark.parametrize("name", list(models.MODELS))
-def test_every_model_accepts_a_new_class_mid_stream(name: str) -> None:
+def test_the_model_accepts_a_new_class_mid_stream() -> None:
     """The property the task demands: no fixed label set, no rebuild."""
-    model = models.build(name)
+    model = models.build()
     model.learn_one({"a": 1.0, "b": 2.0}, "roboto")
 
     assert model.predict_one({"a": 1.0, "b": 2.0}) == "roboto"
@@ -148,9 +147,14 @@ def test_every_model_accepts_a_new_class_mid_stream(name: str) -> None:
     assert set(model.predict_proba_one({"a": 1.0, "b": 2.0})) == {"roboto", "anton"}
 
 
-def test_an_unknown_model_name_is_rejected() -> None:
-    with pytest.raises(ValueError, match="unknown model"):
-        models.build("magic")
+def test_only_the_recent_window_is_remembered() -> None:
+    """Memory is bounded, so it does not grow with the length of the stream."""
+    model = models.build(window_size=20)
+    for index in range(200):
+        model.learn_one({"a": float(index)}, "early" if index < 100 else "late")
+
+    # The early class has been pushed out of the window entirely.
+    assert model.predict_one({"a": 1.0}) == "late"
 
 
 # ------------------------------------------------------------------ prequential
