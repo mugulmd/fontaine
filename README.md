@@ -7,8 +7,8 @@ Two programs share one data contract:
 - **the generator** — synthesises an endless stream of image crops around text boxes,
   each annotated with the font that drew it. Which fonts appear, how often, and from
   which item onwards are all things you state, so a stream is a designed experiment.
-- **the recognizer** (not built yet) — consumes that stream one item at a time,
-  predicting before it is told the label, and discovering the font set as it goes.
+- **the recognizer** — consumes that stream one item at a time, predicting before it
+  is told the label, and adding fonts to its vocabulary as they appear.
 
 ## Setup
 
@@ -180,6 +180,59 @@ for sample in read_stream(Path("data/streams/v1")):
     prediction = model.predict(sample.image)  # predict before seeing the label
     model.learn(sample.image, sample.label)  # then learn from it
 ```
+
+## The recognizer
+
+A baseline with no neural network in it: hand-crafted features from the ink, fed to
+an online classifier from [river](https://riverml.xyz).
+
+```sh
+uv run fontaine recognize --stream data/streams/v1 --model knn
+uv run fontaine recognize -c configs/stream.yaml -n 5000     # generate live instead
+```
+
+Measured on the twelve-font pool, 3,000 items, uniform weights:
+
+| model | accuracy | balanced | macro F1 | vs. majority |
+|---|---|---|---|---|
+| `knn` | **57.3%** | 57.1% | 57.2% | 6.8x |
+| `gaussian-nb` | 42.4% | 42.3% | 40.4% | 5.0x |
+| `hoeffding-tree` | 42.1% | 42.0% | 40.2% | 5.0x |
+| `adaptive-forest` | 41.9% | 41.5% | 38.6% | 5.0x |
+
+Chance is 8.3%. Every model here accepts a label it has never seen, mid-stream,
+without being rebuilt — the property this dataset demands and the reason river
+suits it. Features go in as a dict, wrapped in river's online `StandardScaler`.
+
+**Read the balanced column, not the accuracy.** On an imbalanced stream the two
+diverge sharply: with one font weighted 5x, `hoeffding-tree` scored 40.0% accuracy —
+exactly the majority baseline — with 10.0% balanced accuracy, because it had
+collapsed to always answering the dominant font. That is why the majority and chance
+baselines are printed beside every result, and why a lift below 1x is called out.
+
+The features are all scale-free and none of them reads the text: log aspect, ink
+density, a 12-bin row profile (where the baseline and x-height sit), an 8-bin column
+profile with its autocorrelation (set width, and the giveaway of a monospace),
+stroke thickness mean and variance from a distance transform (weight, and the
+thick-to-thin contrast that separates a Didone from a grotesque), estimated slant,
+edge density and stroke orientation. 38 numbers, about 550 crops a second.
+
+Two things worth knowing. Polarity is normalized first, since crops are
+light-on-dark as often as the reverse and every feature would otherwise flip. And
+the mask is trimmed to the ink, so the crop jitter the generator introduces on
+purpose cannot shift the measurements.
+
+`fontaine recognize` also reports, per font, the item it was **scheduled** to arrive
+at, the item it first actually appeared at, and the item it was first predicted
+correctly — the discovery lag the stream design exists to measure.
+
+### What the baseline cannot do
+
+The confusions are concentrated in the four plain sans faces — Roboto, Nunito,
+Montserrat, Ubuntu — which differ in curve details that coarse statistics do not
+reach. Casing is the other cost: an all-caps and an all-lowercase crop of one font
+have genuinely different row profiles, and the corpus randomises casing on purpose.
+Narrowing `corpus.casing` isolates the font signal if you want to measure that gap.
 
 ## Tests and checks
 

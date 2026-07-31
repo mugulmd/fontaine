@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from itertools import islice
 from pathlib import Path
 from typing import Annotated
 
@@ -14,11 +15,15 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 from rich.table import Table
 
 from fontaine.config import DEFAULT_CONFIG_PATH, Range, StreamConfig, load_stream_config
+from fontaine.evaluate import prequential
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
+from fontaine.recognize import features as feature_module
+from fontaine.recognize import models as model_module
 from fontaine.render import background as background_module
 from fontaine.render.textbox import CropRenderer, RenderError
 from fontaine.rng import item_rng
+from fontaine.store import reader as store_reader
 from fontaine.store.writer import write_stream
 from fontaine.stream import arrival as arrival_module
 from fontaine.stream.arrival import ArrivalProcess, ScheduleError
@@ -360,6 +365,156 @@ def arrival(
             f"lengthen the stream, raise their weight, or check their start",
             style="yellow",
         )
+
+
+@app.command("recognize")
+def recognize(
+    stream: Annotated[
+        Path | None,
+        typer.Option("--stream", "-s", help="A saved stream directory to replay."),
+    ] = None,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+    count: Annotated[
+        int, typer.Option("--count", "-n", help="Items to evaluate when generating live.")
+    ] = 5_000,
+    model_name: Annotated[
+        str, typer.Option("--model", "-m", help=f"One of: {', '.join(model_module.MODELS)}.")
+    ] = model_module.DEFAULT_MODEL,
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Stop after this many items of a saved stream.")
+    ] = None,
+    classes: Annotated[
+        bool, typer.Option("--classes/--no-classes", help="Print the per-font table.")
+    ] = True,
+    font_dir: FontDirOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Score an online recognizer over a stream, predicting before it is told.
+
+    Reads a saved stream with ``--stream``, or generates one on the fly from the
+    config. Both paths hand the model the same items, so the numbers are comparable.
+    """
+    if model_name not in model_module.MODELS:
+        console.print(f"[red]unknown model {model_name!r}[/red]")
+        for name, description in model_module.MODELS.items():
+            console.print(f"  [cyan]{name}[/cyan] — {description}", style="dim")
+        raise typer.Exit(code=1)
+
+    schedule: dict[str, int] | None = None
+    if stream is not None:
+        try:
+            manifest = store_reader.read_manifest(stream)
+        except store_reader.StreamNotFound as error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(code=1) from error
+        total = manifest["n_items"] if limit is None else min(limit, manifest["n_items"])
+        schedule = prequential.schedule_from_manifest(
+            manifest, manifest.get("label_granularity", "face")
+        )
+        samples = store_reader.read_stream(stream)
+        if limit is not None:
+            samples = islice(samples, limit)
+        source = f"replaying [bold]{stream}[/bold]"
+    else:
+        settings = _load(config)
+        if font_dir is not None:
+            settings.fonts.font_dir = font_dir
+        registry = _scan(settings, verbose=verbose)
+        generator = _generator(settings, registry)
+        schedule = {
+            plan.face_id: plan.start
+            for plan in generator.arrivals.schedule
+            if registry.label_granularity == "face"
+        }
+        samples = generator.take(count)
+        total = count
+        source = f"generating live from [bold]{config}[/bold]"
+
+    console.print(f"{source} — model [cyan]{model_name}[/cyan], {total:,} items")
+    model = model_module.build(model_name)
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("evaluating", total=total)
+        result = prequential.run(
+            samples,
+            model,
+            feature_module.describe,
+            schedule=schedule,
+            on_item=lambda _: progress.advance(task),
+        )
+
+    console.print(_headline_table(result))
+    if classes:
+        console.print(_classes_table(result))
+    if result.confusions:
+        worst = "   ".join(
+            f"{true.split(':')[0]}→{predicted.split(':')[0]} {n}"
+            for (true, predicted), n in result.worst_confusions(5)
+        )
+        console.print(f"most confused: {worst}", style="dim")
+
+
+def _headline_table(result: prequential.Result) -> Table:
+    """Accuracy beside what a model that learned nothing would have scored."""
+    table = Table(title="prequential score", title_justify="left", header_style="bold")
+    table.add_column("measure")
+    table.add_column("value", justify="right")
+    table.add_column("meaning", style="dim", overflow="fold")
+
+    lift = result.accuracy / result.majority_accuracy if result.majority_accuracy else float("inf")
+    rows = [
+        (
+            "accuracy",
+            f"{result.accuracy:.1%}",
+            "predicted before being told, over the whole stream",
+        ),
+        ("recent accuracy", f"{result.rolling_accuracy:.1%}", f"last {prequential.WINDOW} items"),
+        ("balanced accuracy", f"{result.balanced_accuracy:.1%}", "averaged over fonts, not items"),
+        ("macro F1", f"{result.macro_f1:.1%}", "penalises ignoring the rare fonts"),
+        (
+            "majority baseline",
+            f"{result.majority_accuracy:.1%}",
+            "always answer the commonest font",
+        ),
+        ("chance baseline", f"{result.chance_accuracy:.1%}", "guess uniformly among fonts seen"),
+        ("lift over majority", f"{lift:.1f}x", "below 1 means the model learned nothing"),
+        ("abstentions", f"{result.abstentions:,}", "no answer yet, before any label was seen"),
+    ]
+    for name, value, meaning in rows:
+        table.add_row(name, value, meaning)
+    return table
+
+
+def _classes_table(result: prequential.Result) -> Table:
+    """Per-font accuracy and how long each took to be recognised."""
+    table = Table(title="per font", title_justify="left", header_style="bold")
+    # Short headers so the label, which is the class name, never has to wrap.
+    table.add_column("font", overflow="fold", style="cyan")
+    table.add_column("items", justify="right")
+    table.add_column("acc", justify="right")
+    table.add_column("sched", justify="right")
+    table.add_column("seen", justify="right")
+    table.add_column("right", justify="right")
+    table.add_column("lag", justify="right")
+
+    for report in sorted(result.classes.values(), key=lambda item: -item.seen):
+        lag = report.discovery_lag
+        table.add_row(
+            report.label,
+            f"{report.seen:,}",
+            f"{report.accuracy:.0%}",
+            f"{report.scheduled_start:,}" if report.scheduled_start is not None else "-",
+            f"{report.first_seen:,}" if report.first_seen is not None else "-",
+            f"{report.first_correct:,}" if report.first_correct is not None else "[dim]never[/dim]",
+            f"{lag:,}" if lag is not None else "[dim]-[/dim]",
+        )
+    return table
 
 
 def _schedule_table(process: ArrivalProcess, n_items: int) -> Table:
