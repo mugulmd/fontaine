@@ -8,6 +8,7 @@ dependencies = [
     "fonttools>=4.63.0",
     "numpy>=2.5.1",
     "pillow>=12.3.0",
+    "pydantic>=2.13.4",
     "pyyaml>=6.0.3",
     "river>=0.25.0",
     "typer>=0.27.0",

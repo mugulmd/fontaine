@@ -6,31 +6,22 @@ is private to one side or the other.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from PIL import Image
+from pydantic import BaseModel, Field
 
-LabelGranularity = Literal["face", "family"]
 
+class FontFace(BaseModel):
+    """A single renderable font face.
 
-@dataclass(frozen=True, slots=True)
-class FontFace:
-    """A single renderable font face: one file, or one index inside a ``.ttc``.
-
-    ``face_id`` is the classification label at face granularity; ``family_id``
-    is the label at family granularity. Both are stable slugs derived from the
-    font's ``name`` table, so they survive the file being moved or renamed.
+    ``face_id`` is a stable slugs derived from the font's ``name`` table,
+    so it survives the file being moved or renamed.
     """
 
     face_id: str
-    family_id: str
-    family: str
-    subfamily: str
-    postscript_name: str | None
     path: Path
-    font_number: int
     weight: int
     width_class: int
     italic: bool
@@ -38,11 +29,7 @@ class FontFace:
     variable: bool
     units_per_em: int
     n_glyphs: int
-    codepoints: frozenset[int] = field(repr=False, compare=False, default=frozenset())
-
-    def label(self, granularity: LabelGranularity) -> str:
-        """This face's class name at the requested granularity."""
-        return self.face_id if granularity == "face" else self.family_id
+    codepoints: frozenset[int] = Field(default_factory=frozenset)
 
     def covers(self, text: str) -> bool:
         """Whether every character of ``text`` has a glyph in this face."""
@@ -56,48 +43,8 @@ class FontFace:
                 seen[char] = None
         return "".join(seen)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serializable view. ``codepoints`` is dropped — it is derivable from the file."""
-        return {
-            "face_id": self.face_id,
-            "family_id": self.family_id,
-            "family": self.family,
-            "subfamily": self.subfamily,
-            "postscript_name": self.postscript_name,
-            "path": str(self.path),
-            "font_number": self.font_number,
-            "weight": self.weight,
-            "width_class": self.width_class,
-            "italic": self.italic,
-            "monospace": self.monospace,
-            "variable": self.variable,
-            "units_per_em": self.units_per_em,
-            "n_glyphs": self.n_glyphs,
-        }
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> FontFace:
-        """Rebuild a face from :meth:`to_dict` output."""
-        return cls(
-            face_id=data["face_id"],
-            family_id=data["family_id"],
-            family=data["family"],
-            subfamily=data["subfamily"],
-            postscript_name=data["postscript_name"],
-            path=Path(data["path"]),
-            font_number=data["font_number"],
-            weight=data["weight"],
-            width_class=data["width_class"],
-            italic=data["italic"],
-            monospace=data["monospace"],
-            variable=data["variable"],
-            units_per_em=data["units_per_em"],
-            n_glyphs=data["n_glyphs"],
-        )
-
-
-@dataclass(slots=True)
-class Sample:
+class Sample(BaseModel):
     """One item of the stream: a crop around a text box, and the font that drew it.
 
     ``metadata`` carries the full generation parameters (px size, contrast,
@@ -109,4 +56,4 @@ class Sample:
     index: int
     image: Image.Image
     label: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
