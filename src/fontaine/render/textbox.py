@@ -11,7 +11,6 @@ The pipeline for a single item:
 6. draw the text on its own layer, and take the tight ink box from its alpha
 7. crop the ink box with independent per-side padding — the text detector's
    imprecision, including boxes tight enough to clip the glyphs
-8. apply capture degradations
 
 The tight ink box comes from the rendered alpha rather than from font metrics:
 metrics miss accent height and overshoot, and the crop has to sit on what was
@@ -31,7 +30,6 @@ from PIL import Image, ImageDraw, ImageFont
 from fontaine.config import RenderConfig
 from fontaine.contracts import FontFace
 from fontaine.render import background as background_module
-from fontaine.render import degrade
 from fontaine.render.color import (
     RGB,
     ContrastPlan,
@@ -130,7 +128,6 @@ class CropRenderer:
 
         crop_box, pads = _jittered_box(rng, ink_box, crop_config.pad, canvas_size)
         crop = image.crop(crop_box)
-        crop, degradations = degrade.apply(rng, crop, self.config.degrade)
 
         return RenderedCrop(
             image=crop,
@@ -156,7 +153,6 @@ class CropRenderer:
                 "contrast_achieved": round(achieved_ratio, 2),
                 "scrim": scrim,
                 "neighbor": neighbor,
-                "degradations": degradations,
             },
         )
 

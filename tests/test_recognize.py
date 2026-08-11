@@ -268,9 +268,10 @@ def test_schedule_is_read_from_a_manifest() -> None:
         ]
     }
 
-    by_face = prequential.schedule_from_manifest(manifest, "face")
-    assert by_face == {"roboto:regular": 0, "roboto:bold": 900, "anton:regular": 400}
+    starts = prequential.schedule_from_manifest(manifest)
 
-    # At family granularity a label arrives when the earliest of its faces does.
-    by_family = prequential.schedule_from_manifest(manifest, "family")
-    assert by_family == {"roboto": 0, "anton": 400}
+    assert starts == {"roboto:regular": 0, "roboto:bold": 900, "anton:regular": 400}
+
+
+def test_schedule_from_a_manifest_without_one_is_empty() -> None:
+    assert prequential.schedule_from_manifest({}) == {}

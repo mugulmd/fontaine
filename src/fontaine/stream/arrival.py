@@ -22,19 +22,20 @@ from __future__ import annotations
 
 import random
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
+from pydantic import BaseModel, Field
+
 from fontaine.config import ArrivalConfig, FontRule
-from fontaine.contracts import FontFace, LabelGranularity
+from fontaine.contracts import FontFace
 
 
 class ScheduleError(ValueError):
     """Raised when a configured schedule cannot produce a stream."""
 
 
-@dataclass(frozen=True, slots=True)
-class FontSchedule:
+class FontSchedule(BaseModel):
     """The resolved plan for one font: the experiment as the process will run it."""
 
     face_id: str
@@ -48,20 +49,10 @@ class FontSchedule:
         """Whether this font can be drawn for the item at ``index``."""
         return self.weight > 0 and self.start <= index and (self.stop is None or index < self.stop)
 
-    def to_dict(self) -> dict[str, object]:
-        """Serializable view, for the stream manifest."""
-        return {
-            "face_id": self.face_id,
-            "weight": self.weight,
-            "start": self.start,
-            "stop": self.stop,
-            "pattern": self.pattern,
-        }
-
 
 @dataclass(frozen=True, slots=True)
 class Arrival:
-    """One step of the process."""
+    """One step of the process. In-memory only — never serialized."""
 
     index: int
     face: FontFace
@@ -69,35 +60,18 @@ class Arrival:
     #: Note this is the first *actual* appearance, which for a rare font can fall
     #: well after the item its schedule allowed it from.
     first_seen: bool
-    #: True when this face's *label* has never appeared before. Differs from
-    #: ``first_seen`` at family granularity, where a new face of a known family
-    #: is not a new class.
-    label_first_seen: bool
     #: How many distinct faces have appeared, including this one.
     n_seen: int
 
 
-@dataclass(slots=True)
-class ArrivalStats:
+class ArrivalStats(BaseModel):
     """Ground truth about a run of the process, for scoring discovery later."""
 
     n_items: int = 0
-    #: Step at which each face and each label first actually appeared.
-    face_first_seen: dict[str, int] = field(default_factory=dict)
-    label_first_seen: dict[str, int] = field(default_factory=dict)
-    #: Total appearances per face and per label.
-    face_counts: dict[str, int] = field(default_factory=dict)
-    label_counts: dict[str, int] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, object]:
-        """Serializable snapshot, for the stream manifest."""
-        return {
-            "n_items": self.n_items,
-            "face_first_seen": self.face_first_seen,
-            "label_first_seen": self.label_first_seen,
-            "face_counts": self.face_counts,
-            "label_counts": self.label_counts,
-        }
+    #: Step at which each face first actually appeared.
+    face_first_seen: dict[str, int] = Field(default_factory=dict)
+    #: Total appearances per face.
+    face_counts: dict[str, int] = Field(default_factory=dict)
 
 
 def resolve_schedule(
@@ -169,12 +143,10 @@ class ArrivalProcess:
         config: ArrivalConfig | None = None,
         *,
         seed: int = 0,
-        label_granularity: LabelGranularity = "face",
     ) -> None:
         if not faces:
             raise ScheduleError("the arrival process needs at least one face")
         self.config = config or ArrivalConfig()
-        self.label_granularity = label_granularity
         self.schedule = resolve_schedule(faces, self.config)
         self.stats = ArrivalStats()
 
@@ -212,22 +184,16 @@ class ArrivalProcess:
             self._refresh()
 
         face = self._rng.choices(self._active, cum_weights=self._cumulative, k=1)[0]
-        label = face.label(self.label_granularity)
         first_seen = face.face_id not in self.stats.face_first_seen
-        label_first_seen = label not in self.stats.label_first_seen
         if first_seen:
             self.stats.face_first_seen[face.face_id] = self._step
-        if label_first_seen:
-            self.stats.label_first_seen[label] = self._step
         self.stats.face_counts[face.face_id] = self.stats.face_counts.get(face.face_id, 0) + 1
-        self.stats.label_counts[label] = self.stats.label_counts.get(label, 0) + 1
         self.stats.n_items = self._step + 1
 
         arrival = Arrival(
             index=self._step,
             face=face,
             first_seen=first_seen,
-            label_first_seen=label_first_seen,
             n_seen=len(self.stats.face_first_seen),
         )
         self._step += 1

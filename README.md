@@ -50,14 +50,8 @@ Each face gets a stable slug label — `georgia:bold-italic` — derived from th
 font's `name` table rather than its filename, so moving or renaming a file does
 not rename the class. `.ttc` collections expand to one face per index.
 
-Labels come at two granularities, set by `label_granularity` in the config:
-
-- `face` — `georgia:regular` and `georgia:bold-italic` are distinct classes.
-  Recommended: classes then match what is actually visible in the pixels.
-- `family` — every weight and slant collapses into `georgia`.
-
-Both are always stored per face, so a stream generated at one granularity can be
-re-scored at the other.
+One face is one class: `georgia:regular` and `georgia:bold-italic` are distinct
+labels, so the classes match what is actually visible in the pixels.
 
 Faces that cannot render the configured `admission_charset`, and variable fonts
 (v1 renders static instances only), are **reported** in the scan output rather
@@ -106,7 +100,9 @@ A few decisions worth knowing about:
   designer does — escalating opacity until the floor in `min_contrast` is met.
 - **Crop jitter is not a degradation.** Boxes from a text detector are imprecise by
   nature, including tight enough to clip ascenders, so padding jitter stays on
-  even in v1. Everything in the `degrade` section is off by default.
+  even in v1. Capture artefacts (blur, JPEG, noise, rotation) are not modelled at
+  all: clean renders first, so the pipeline can be validated against an easy
+  accuracy ceiling.
 - **The text never correlates with the font.** Content and casing are sampled
   independently of the face, so the letterforms are the only signal.
 
@@ -172,7 +168,7 @@ data/streams/v1/crops/00000/*.png  the crops, sharded by index
 The manifest is written last, so a directory with a manifest is a complete stream
 and an interrupted run cannot be mistaken for a finished one. It carries both halves
 of the ground truth: the resolved `schedule` (the item each font was *meant* to
-arrive at) and `label_first_seen` (the item it *actually* first appeared at). A rare
+arrive at) and `arrival.face_first_seen` (the item it *actually* first appeared at). A rare
 font allowed from item 3000 may not be drawn until 3200, so scoring detection lag
 needs the former as the baseline.
 

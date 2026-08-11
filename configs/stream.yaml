@@ -7,11 +7,6 @@ seed: 0
 fonts:
   font_dir: assets/fonts
 
-  # face   → georgia:regular and georgia:bold-italic are distinct classes
-  #          (recommended: classes then match what is visible in the pixels)
-  # family → every weight and slant collapses into georgia
-  label_granularity: face
-
   # Glyphs a face must have to enter the label space. Keep this to a core set:
   # the corpus intersects its alphabet with each face's real coverage, so a face
   # missing a few rare glyphs still contributes rather than being excluded.
@@ -112,17 +107,3 @@ render:
     # A neighbouring line bleeding in at an edge. Off for v1.
     neighbor_bleed_prob: 0.0
     neighbor_gap: [0.15, 0.7]
-
-  # Capture artefacts. All off in v1 — clean renders first, so the pipeline can
-  # be validated against an easy accuracy ceiling.
-  degrade:
-    blur_prob: 0.0
-    blur_radius: [0.3, 1.2]
-    downscale_prob: 0.0
-    downscale_factor: [0.4, 0.9]
-    jpeg_prob: 0.0
-    jpeg_quality: [30, 85]
-    noise_prob: 0.0
-    noise_sigma: [2.0, 12.0]
-    rotate_prob: 0.0
-    rotate_deg: [-2.5, 2.5]

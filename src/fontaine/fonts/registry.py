@@ -13,14 +13,13 @@ import unicodedata
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
 
 from fontTools.ttLib import TTCollection, TTFont, TTLibError
+from pydantic import BaseModel, Field
 
-from fontaine.contracts import FontFace, LabelGranularity
+from fontaine.contracts import FontFace
 from fontaine.fonts.coverage import resolve_charset
 
 FONT_EXTENSIONS = frozenset({".ttf", ".otf", ".ttc", ".otc"})
@@ -30,7 +29,6 @@ COLLECTION_EXTENSIONS = frozenset({".ttc", ".otc"})
 # "Roboto / Condensed Bold" correctly instead of "Roboto Condensed / Bold".
 _NAME_FAMILY = (16, 1)
 _NAME_SUBFAMILY = (17, 2)
-_NAME_POSTSCRIPT = (6,)
 
 _FS_SELECTION_ITALIC = 1 << 0
 _MAC_STYLE_ITALIC = 1 << 1
@@ -59,8 +57,7 @@ _WEIGHT_KEYWORDS: tuple[tuple[str, int], ...] = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class RejectedFace:
+class RejectedFace(BaseModel):
     """A face that was parsed but excluded from the label space."""
 
     face: FontFace
@@ -68,71 +65,40 @@ class RejectedFace:
     detail: str = ""
 
 
-@dataclass(frozen=True, slots=True)
-class UnreadableFile:
+class UnreadableFile(BaseModel):
     """A file under the font dir that could not be parsed at all."""
 
     path: Path
     error: str
 
 
-@dataclass(slots=True)
-class FontRegistry:
-    """The resolved label space, plus everything that was left out and why."""
+class FontRegistry(BaseModel):
+    """The resolved label space, plus everything that was left out and why.
+
+    Snapshotted into the stream manifest by ``model_dump``, and rebuilt from one
+    by ``model_validate``. Faces come back without their codepoint sets — a
+    replayed stream needs the labels, not the ability to re-render.
+    """
 
     faces: list[FontFace]
-    label_granularity: LabelGranularity = "face"
     charset: str = ""
-    rejected: list[RejectedFace] = field(default_factory=list)
-    unreadable: list[UnreadableFile] = field(default_factory=list)
+    rejected: list[RejectedFace] = Field(default_factory=list)
+    unreadable: list[UnreadableFile] = Field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.faces)
 
-    def __iter__(self) -> Iterator[FontFace]:
+    def __iter__(self) -> Iterator[FontFace]:  # type: ignore[override]
         return iter(self.faces)
 
     @property
     def labels(self) -> list[str]:
-        """The distinct labels at the configured granularity, in registry order."""
-        return list(dict.fromkeys(face.label(self.label_granularity) for face in self.faces))
-
-    @property
-    def families(self) -> list[str]:
-        """The distinct families in the label space, in registry order."""
-        return list(dict.fromkeys(face.family_id for face in self.faces))
+        """The label space, in registry order. One label per face."""
+        return [face.face_id for face in self.faces]
 
     def by_face_id(self) -> dict[str, FontFace]:
         """The kept faces, keyed by face id."""
         return {face.face_id: face for face in self.faces}
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serializable snapshot, including what was excluded and why."""
-        return {
-            "label_granularity": self.label_granularity,
-            "charset": self.charset,
-            "faces": [face.to_dict() for face in self.faces],
-            "rejected": [
-                {"face_id": item.face.face_id, "reason": item.reason, "detail": item.detail}
-                for item in self.rejected
-            ],
-            "unreadable": [
-                {"path": str(item.path), "error": item.error} for item in self.unreadable
-            ],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> FontRegistry:
-        """Rebuild a registry from a manifest snapshot.
-
-        Codepoint sets are not restored — a replayed stream needs the labels, not
-        the ability to re-render.
-        """
-        return cls(
-            faces=[FontFace.from_dict(item) for item in data["faces"]],
-            label_granularity=data.get("label_granularity", "face"),
-            charset=data.get("charset", ""),
-        )
 
 
 @contextmanager
@@ -234,10 +200,8 @@ def _face_from_font(font: TTFont, path: Path, font_number: int) -> FontFace:
     return FontFace(
         # face_id is finalized by the caller, which owns collision resolution.
         face_id=f"{_slug(family)}:{_slug(subfamily)}",
-        family_id=_slug(family),
         family=family,
         subfamily=subfamily,
-        postscript_name=_name(font, _NAME_POSTSCRIPT),
         path=path,
         font_number=font_number,
         weight=_weight(font, subfamily),
@@ -273,7 +237,6 @@ def scan(
     font_dir: Path,
     *,
     charset: str = "ascii_printable",
-    label_granularity: LabelGranularity = "face",
     exclude: tuple[str, ...] = (),
     include_variable: bool = False,
     verbose: bool = False,
@@ -299,7 +262,7 @@ def scan(
             with quiet_fonttools(not verbose):
                 parsed = _read_faces(path)
         except (TTLibError, OSError, ValueError, KeyError, IndexError, AssertionError) as error:
-            unreadable.append(UnreadableFile(path, f"{type(error).__name__}: {error}"))
+            unreadable.append(UnreadableFile(path=path, error=f"{type(error).__name__}: {error}"))
             continue
 
         for face in parsed:
@@ -308,22 +271,31 @@ def scan(
             if occurrence > 1:
                 # Two files claiming the same family+style. Keep both, disambiguated,
                 # rather than letting one shadow the other.
-                face = replace(face, face_id=f"{face.face_id}#{occurrence}")
+                face = face.model_copy(update={"face_id": f"{face.face_id}#{occurrence}"})
 
             if face.variable and not include_variable:
-                rejected.append(RejectedFace(face, "variable-font", "static instances only in v1"))
+                rejected.append(
+                    RejectedFace(
+                        face=face,
+                        reason="variable-font",
+                        detail="static instances only in v1",
+                    )
+                )
                 continue
             missing = face.missing_from(required)
             if missing:
                 rejected.append(
-                    RejectedFace(face, "missing-glyphs", f"{len(missing)} missing: {missing[:24]}")
+                    RejectedFace(
+                        face=face,
+                        reason="missing-glyphs",
+                        detail=f"{len(missing)} missing: {missing[:24]}",
+                    )
                 )
                 continue
             faces.append(face)
 
     return FontRegistry(
         faces=faces,
-        label_granularity=label_granularity,
         charset=charset,
         rejected=rejected,
         unreadable=unreadable,

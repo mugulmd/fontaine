@@ -10,9 +10,10 @@ from __future__ import annotations
 import math
 import random
 from pathlib import Path
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_CONFIG_PATH = Path("configs/stream.yaml")
 
@@ -23,9 +24,29 @@ class Range(BaseModel):
     lo: float
     hi: float
 
-    def __post_init__(self) -> None:
+    def __init__(self, lo: float | None = None, hi: float | None = None, **data: Any) -> None:
+        """Accept ``Range(18, 64)`` as well as ``Range(lo=18, hi=64)``."""
+        if lo is not None:
+            data["lo"] = lo
+        if hi is not None:
+            data["hi"] = hi
+        super().__init__(**data)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_pair(cls, value: Any) -> Any:
+        """Accept the YAML ``[lo, hi]`` form as well as a ``{lo:, hi:}`` mapping."""
+        if isinstance(value, list | tuple):
+            if len(value) != 2:
+                raise ValueError(f"a range needs exactly two values, got {list(value)}")
+            return {"lo": value[0], "hi": value[1]}
+        return value
+
+    @model_validator(mode="after")
+    def _check_ordered(self) -> Range:
         if self.hi < self.lo:
             raise ValueError(f"range is inverted: [{self.lo}, {self.hi}]")
+        return self
 
     @property
     def fixed(self) -> bool:
@@ -63,6 +84,11 @@ class FontsConfig(BaseModel):
     #: core set — the corpus intersects its alphabet with each face's real
     #: coverage, so a face need not cover every character the corpus can emit.
     admission_charset: str = "ascii_alnum"
+    #: Glob patterns over file names and paths, skipped before parsing.
+    exclude: tuple[str, ...] = ()
+    #: Keep variable fonts. Off by default: v1 renders static instances only, so a
+    #: variable file would enter the label space as one arbitrary default face.
+    include_variable: bool = False
 
 
 class FontRule(BaseModel):
@@ -210,10 +236,6 @@ class StreamConfig(BaseModel):
     render: RenderConfig = Field(default_factory=RenderConfig)
 
 
-# FIXME: this will likely not work because:
-# - nested dicts
-# - current config file is wrongly formatted
-# - we need to handle range properly
 def load_stream_config(path: Path | None = DEFAULT_CONFIG_PATH) -> StreamConfig:
     """Load a :class:`StreamConfig`; ``None`` yields the built-in defaults."""
     if path is None:

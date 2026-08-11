@@ -19,7 +19,6 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from fontaine import config as config_module
 from fontaine.contracts import Sample
 from fontaine.stream.generator import StreamGenerator
 
@@ -31,11 +30,10 @@ DEFAULT_SHARD_SIZE = 10_000
 
 @dataclass(slots=True)
 class StreamReport:
-    """What a generation run produced."""
+    """What a generation run produced. Returned to the caller, never serialized."""
 
     directory: Path
     n_items: int
-    n_labels: int
     n_faces: int
     n_skipped: int
 
@@ -96,25 +94,20 @@ def write_stream(
         "seed": generator.config.seed,
         "n_items": written,
         "shard_size": shard_size,
-        "label_granularity": generator.registry.label_granularity,
-        "config": config_module.to_dict(generator.config),
-        "registry": generator.registry.to_dict(),
+        "config": generator.config.model_dump(mode="json"),
+        "registry": generator.registry.model_dump(mode="json"),
         # The schedule is what was asked for; the stats are what happened. Both
         # are needed to score detection lag against the item a class was meant to
         # arrive at, rather than against the item it happened to first show up on.
-        "schedule": [plan.to_dict() for plan in generator.arrivals.schedule],
-        "arrival": stats.to_dict(),
-        "skipped": [
-            {"index": item.index, "face_id": item.face_id, "error": item.error}
-            for item in generator.skipped
-        ],
+        "schedule": [plan.model_dump(mode="json") for plan in generator.arrivals.schedule],
+        "arrival": stats.model_dump(mode="json"),
+        "skipped": [item.model_dump(mode="json") for item in generator.skipped],
     }
     (directory / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
 
     return StreamReport(
         directory=directory,
         n_items=written,
-        n_labels=len(stats.label_counts),
         n_faces=len(stats.face_counts),
         n_skipped=len(generator.skipped),
     )

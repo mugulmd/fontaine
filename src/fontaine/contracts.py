@@ -10,18 +10,23 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FontFace(BaseModel):
-    """A single renderable font face.
+    """A single renderable font face: one file, or one index inside a ``.ttc``.
 
-    ``face_id`` is a stable slugs derived from the font's ``name`` table,
-    so it survives the file being moved or renamed.
+    ``face_id`` is the classification label — a stable slug derived from the
+    font's ``name`` table, so it survives the file being moved or renamed.
     """
 
     face_id: str
+    family: str
+    subfamily: str
     path: Path
+    #: Index of this face inside a ``.ttc``/``.otc`` collection, 0 for a plain file.
+    #: Needed to load the right face back out of the file.
+    font_number: int = 0
     weight: int
     width_class: int
     italic: bool
@@ -29,7 +34,9 @@ class FontFace(BaseModel):
     variable: bool
     units_per_em: int
     n_glyphs: int
-    codepoints: frozenset[int] = Field(default_factory=frozenset)
+    #: Left out of the serialized form: derivable from the file, and large. A
+    #: replayed stream needs the labels, not the ability to re-render.
+    codepoints: frozenset[int] = Field(default_factory=frozenset, exclude=True, repr=False)
 
     def covers(self, text: str) -> bool:
         """Whether every character of ``text`` has a glyph in this face."""
@@ -52,6 +59,10 @@ class Sample(BaseModel):
     fact. The recognizer must never read it — only ``image`` at prediction time
     and ``label`` when it is subsequently allowed to learn.
     """
+
+    # PIL images have no pydantic schema, and there is nothing to validate about
+    # one here: the renderer produced it.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     index: int
     image: Image.Image

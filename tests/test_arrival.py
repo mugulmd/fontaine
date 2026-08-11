@@ -220,7 +220,6 @@ def test_counts_add_up_to_the_number_of_items(font_dir: Path) -> None:
     process.take(250)
 
     assert sum(process.stats.face_counts.values()) == 250
-    assert sum(process.stats.label_counts.values()) == 250
     assert process.stats.n_items == 250
 
 
@@ -235,15 +234,13 @@ def test_first_seen_flags_agree_with_the_recorded_ground_truth(font_dir: Path) -
         assert min(item.index for item in items if item.face.face_id == face_id) == step
 
 
-def test_a_new_face_of_a_known_family_is_not_a_new_label(font_dir: Path) -> None:
-    """At family granularity, discovery is about families, not files."""
+def test_faces_of_the_same_family_are_distinct_labels(font_dir: Path) -> None:
+    """Labels are per face: two weights of one family are two classes to discover."""
     faces = _pool(font_dir, 6, families=2)
-    process = ArrivalProcess(faces, seed=0, label_granularity="family")
-    items = process.take(400)
+    process = ArrivalProcess(faces, seed=0)
+    process.take(400)
 
-    assert len(process.stats.label_counts) == 2
     assert len(process.stats.face_counts) == 6
-    assert any(item.first_seen and not item.label_first_seen for item in items)
 
 
 # ----------------------------------------------------------------- rejection

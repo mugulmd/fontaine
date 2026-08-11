@@ -182,16 +182,6 @@ def run(
     return result
 
 
-def schedule_from_manifest(manifest: dict[str, Any], granularity: str = "face") -> dict[str, int]:
-    """Map label → the item its schedule allowed it from.
-
-    At family granularity several faces share a label, so the label arrives when the
-    earliest of them was allowed to.
-    """
-    starts: dict[str, int] = {}
-    for plan in manifest.get("schedule", []):
-        face_id = plan["face_id"]
-        label = face_id if granularity == "face" else face_id.split(":", 1)[0]
-        start = int(plan["start"])
-        starts[label] = min(start, starts.get(label, start))
-    return starts
+def schedule_from_manifest(manifest: dict[str, Any]) -> dict[str, int]:
+    """Map label → the item its schedule allowed it from."""
+    return {plan["face_id"]: int(plan["start"]) for plan in manifest.get("schedule", [])}

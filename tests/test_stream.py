@@ -70,23 +70,11 @@ def test_generator_carries_the_discovery_ground_truth(stream_setup) -> None:
 
     assert samples[0].metadata["first_seen"] is True
     for sample in samples:
-        if sample.metadata["label_first_seen"]:
-            assert generator.stats.label_first_seen[sample.label] == sample.index
+        if sample.metadata["first_seen"]:
+            assert generator.stats.face_first_seen[sample.label] == sample.index
     assert sum(sample.metadata["first_seen"] for sample in samples) == len(
         generator.stats.face_counts
     )
-
-
-def test_generator_labels_at_family_granularity(font_dir: Path, stream_setup) -> None:
-    settings, _ = stream_setup
-    registry = font_registry.scan(
-        settings.fonts.font_dir, charset="ascii_alnum", label_granularity="family"
-    )
-    samples = list(StreamGenerator(settings, registry).take(30))
-
-    assert {sample.label for sample in samples} <= {"fam0", "fam1", "fam2"}
-    # The face is still recorded, so a family-labelled stream can be re-scored.
-    assert all(sample.metadata["face_id"] != sample.label for sample in samples)
 
 
 def test_generator_rejects_an_empty_label_space(stream_setup) -> None:
@@ -154,7 +142,7 @@ def test_manifest_records_config_registry_and_ground_truth(stream_setup, tmp_pat
     assert manifest["seed"] == 3
     assert manifest["n_items"] == 25
     assert manifest["arrival"]["n_items"] == 25
-    assert sum(manifest["arrival"]["label_counts"].values()) == 25
+    assert sum(manifest["arrival"]["face_counts"].values()) == 25
 
     restored = reader.read_config(directory)
     assert restored.seed == settings.seed

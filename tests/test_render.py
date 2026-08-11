@@ -12,7 +12,6 @@ from fontaine.config import (
     BackgroundConfig,
     CorpusConfig,
     CropConfig,
-    DegradeConfig,
     Range,
     RenderConfig,
     TypographyConfig,
@@ -32,7 +31,6 @@ def _config(**overrides: Any) -> RenderConfig:
         "typography": TypographyConfig(cap_height_px=Range(24, 24)),
         "background": BackgroundConfig(sources={"solid": 1.0}, scrim_prob=0.0),
         "crop": CropConfig(pad=Range(0.0, 0.0)),
-        "degrade": DegradeConfig(),
     }
     return RenderConfig(**(defaults | overrides))
 
@@ -129,18 +127,6 @@ def test_letter_spacing_widens_the_crop(face: FontFace) -> None:
 
     assert spaced.metadata["text"] == plain.metadata["text"]
     assert spaced.image.width > plain.image.width
-
-
-def test_degradations_are_off_by_default_and_recorded_when_on(face: FontFace) -> None:
-    clean = CropRenderer(_config()).render(face, random.Random(4))
-    assert clean.metadata["degradations"] == {}
-
-    noisy_config = _config(
-        degrade=DegradeConfig(blur_prob=1.0, jpeg_prob=1.0, jpeg_quality=Range(40, 40))
-    )
-    noisy = CropRenderer(noisy_config).render(face, random.Random(4))
-    assert "blur_radius" in noisy.metadata["degradations"]
-    assert noisy.metadata["degradations"]["jpeg_quality"] == 40
 
 
 def test_contrast_target_is_met_on_a_flat_background(face: FontFace) -> None:

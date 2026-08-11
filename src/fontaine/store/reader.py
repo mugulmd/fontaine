@@ -17,7 +17,6 @@ from typing import Any
 
 from PIL import Image
 
-from fontaine import config as config_module
 from fontaine.config import StreamConfig
 from fontaine.contracts import Sample
 from fontaine.fonts.registry import FontRegistry
@@ -40,12 +39,12 @@ def read_manifest(directory: Path) -> dict[str, Any]:
 
 def read_registry(directory: Path) -> FontRegistry:
     """The label space the stream was generated from."""
-    return FontRegistry.from_dict(read_manifest(directory)["registry"])
+    return FontRegistry.model_validate(read_manifest(directory)["registry"])
 
 
 def read_config(directory: Path) -> StreamConfig:
     """The exact configuration the stream was generated with."""
-    return config_module.from_dict(read_manifest(directory)["config"], context="manifest")
+    return StreamConfig.model_validate(read_manifest(directory)["config"])
 
 
 def read_annotations(directory: Path) -> Iterator[dict[str, Any]]:

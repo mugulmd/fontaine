@@ -57,12 +57,7 @@ def _parse_range(value: str, option: str) -> Range:
 
 def _arrivals(settings: StreamConfig, registry: font_registry.FontRegistry) -> ArrivalProcess:
     try:
-        return ArrivalProcess(
-            registry.faces,
-            settings.arrival,
-            seed=settings.seed,
-            label_granularity=registry.label_granularity,
-        )
+        return ArrivalProcess(registry.faces, settings.arrival, seed=settings.seed)
     except ScheduleError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1) from error
@@ -90,7 +85,6 @@ def _scan(settings: StreamConfig, *, verbose: bool = False) -> font_registry.Fon
         return font_registry.scan(
             fonts.font_dir,
             charset=fonts.admission_charset,
-            label_granularity=fonts.label_granularity,
             exclude=fonts.exclude,
             include_variable=fonts.include_variable,
             verbose=verbose,
@@ -143,12 +137,7 @@ def fonts_scan(
     if registry.unreadable:
         console.print(_unreadable_table(registry))
 
-    console.print(
-        f"\n[green]{len(registry.faces)}[/green] faces kept "
-        f"across [green]{len(registry.families)}[/green] families "
-        f"→ [bold]{len(registry.labels)}[/bold] labels "
-        f"at [cyan]{registry.label_granularity}[/cyan] granularity"
-    )
+    console.print(f"\n[green]{len(registry.faces)}[/green] faces kept — one label each")
     if registry.rejected or registry.unreadable:
         console.print(
             f"[yellow]{len(registry.rejected)}[/yellow] faces rejected, "
@@ -160,7 +149,7 @@ def fonts_scan(
 
     if json_out is not None:
         json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(json.dumps(registry.to_dict(), indent=2))
+        json_out.write_text(json.dumps(registry.model_dump(mode="json"), indent=2))
         console.print(f"registry snapshot → [bold]{json_out}[/bold]")
 
 
@@ -232,7 +221,7 @@ def preview(
         for sample in generator.take(count):
             stats[sample.metadata["background"]] += 1
             stats[f"kind:{sample.metadata['text_kind']}"] += 1
-            marker = " NEW" if sample.metadata["label_first_seen"] else ""
+            marker = " NEW" if sample.metadata["first_seen"] else ""
             cells.append(
                 (sample.image, f"{sample.label}  {sample.metadata['cap_height_px']:.0f}px{marker}")
             )
@@ -248,8 +237,7 @@ def preview(
                 continue
             stats[crop.metadata["background"]] += 1
             stats[f"kind:{crop.metadata['text_kind']}"] += 1
-            label = face.label(registry.label_granularity)
-            cells.append((crop.image, f"{label}  {crop.metadata['cap_height_px']:.0f}px"))
+            cells.append((crop.image, f"{face.face_id}  {crop.metadata['cap_height_px']:.0f}px"))
 
     if not cells:
         console.print("[red]every render failed[/red]")
@@ -310,13 +298,12 @@ def generate(
 
     console.print(
         f"[green]{report.n_items}[/green] items → [bold]{report.directory}[/bold], "
-        f"[green]{report.n_labels}[/green] labels from "
         f"[green]{report.n_faces}[/green] faces"
     )
     if report.n_skipped:
         console.print(f"[yellow]{report.n_skipped} items skipped[/yellow]")
     console.print(_schedule_table(generator.arrivals, report.n_items))
-    console.print(_popularity_line(generator.stats.label_counts, report.n_items), style="dim")
+    console.print(_popularity_line(generator.stats.face_counts, report.n_items), style="dim")
 
 
 @app.command("arrival")
@@ -351,7 +338,7 @@ def arrival(
 
     console.print(f"{count:,} steps — {arrival_module.describe(process.schedule)}")
     console.print(_schedule_table(process, count))
-    console.print(_popularity_line(process.stats.label_counts, count), style="dim")
+    console.print(_popularity_line(process.stats.face_counts, count), style="dim")
 
     missing = [
         plan.face_id
@@ -399,9 +386,7 @@ def recognize(
             console.print(f"[red]{error}[/red]")
             raise typer.Exit(code=1) from error
         total = manifest["n_items"] if limit is None else min(limit, manifest["n_items"])
-        schedule = prequential.schedule_from_manifest(
-            manifest, manifest.get("label_granularity", "face")
-        )
+        schedule = prequential.schedule_from_manifest(manifest)
         samples = store_reader.read_stream(stream)
         if limit is not None:
             samples = islice(samples, limit)
@@ -412,11 +397,7 @@ def recognize(
             settings.fonts.font_dir = font_dir
         registry = _scan(settings, verbose=verbose)
         generator = _generator(settings, registry)
-        schedule = {
-            plan.face_id: plan.start
-            for plan in generator.arrivals.schedule
-            if registry.label_granularity == "face"
-        }
+        schedule = {plan.face_id: plan.start for plan in generator.arrivals.schedule}
         samples = generator.take(count)
         total = count
         source = f"generating live from [bold]{config}[/bold]"
@@ -575,7 +556,7 @@ def _faces_table(registry: font_registry.FontRegistry) -> Table:
         if face.font_number:
             name = f"{name}[{face.font_number}]"
         table.add_row(
-            face.label(registry.label_granularity),
+            face.face_id,
             str(face.weight),
             str(face.width_class),
             flags,

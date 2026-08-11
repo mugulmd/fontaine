@@ -9,8 +9,9 @@ against a live one the same code path.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
 from itertools import islice
+
+from pydantic import BaseModel
 
 from fontaine.config import StreamConfig
 from fontaine.contracts import Sample
@@ -20,8 +21,7 @@ from fontaine.rng import item_rng
 from fontaine.stream.arrival import ArrivalProcess, ArrivalStats
 
 
-@dataclass(slots=True)
-class SkippedItem:
+class SkippedItem(BaseModel):
     """An item that could not be rendered. Recorded rather than silently dropped."""
 
     index: int
@@ -43,12 +43,7 @@ class StreamGenerator:
         self.config = config
         self.registry = registry
         self.renderer = CropRenderer(config.render)
-        self.arrivals = ArrivalProcess(
-            registry.faces,
-            config.arrival,
-            seed=config.seed,
-            label_granularity=registry.label_granularity,
-        )
+        self.arrivals = ArrivalProcess(registry.faces, config.arrival, seed=config.seed)
         self.skipped: list[SkippedItem] = []
 
     @property
@@ -62,20 +57,20 @@ class StreamGenerator:
             try:
                 crop = self.renderer.render(face, item_rng(self.config.seed, arrival.index))
             except RenderError as error:
-                self.skipped.append(SkippedItem(arrival.index, face.face_id, str(error)))
+                self.skipped.append(
+                    SkippedItem(index=arrival.index, face_id=face.face_id, error=str(error))
+                )
                 continue
             yield Sample(
                 index=arrival.index,
                 image=crop.image,
-                label=face.label(self.registry.label_granularity),
+                label=face.face_id,
                 metadata={
                     "face_id": face.face_id,
-                    "family_id": face.family_id,
                     "weight": face.weight,
                     "italic": face.italic,
                     "monospace": face.monospace,
                     "first_seen": arrival.first_seen,
-                    "label_first_seen": arrival.label_first_seen,
                     "n_seen": arrival.n_seen,
                     **crop.metadata,
                 },

@@ -27,7 +27,6 @@ def test_scan_extracts_face_metadata(font_dir: Path) -> None:
 
     assert len(registry) == 2
     assert registry.labels == ["acme-grotesk:bold-italic", "acme-grotesk:regular"]
-    assert registry.families == ["acme-grotesk"]
 
     bold = registry.by_face_id()["acme-grotesk:bold-italic"]
     assert bold.weight == 700
@@ -38,14 +37,14 @@ def test_scan_extracts_face_metadata(font_dir: Path) -> None:
     assert registry.by_face_id()["acme-grotesk:regular"].italic is False
 
 
-def test_family_granularity_merges_styles(font_dir: Path) -> None:
+def test_every_face_is_its_own_label(font_dir: Path) -> None:
     build_font(font_dir / "a.ttf", chars=ALNUM, family="Acme", subfamily="Regular")
     build_font(font_dir / "b.ttf", chars=ALNUM, family="Acme", subfamily="Bold", weight=700)
 
-    faces = font_registry.scan(font_dir, charset="ascii_alnum", label_granularity="family")
+    registry = font_registry.scan(font_dir, charset="ascii_alnum")
 
-    assert len(faces) == 2
-    assert faces.labels == ["acme"]
+    # Registry order follows the file scan, so a.ttf comes before b.ttf.
+    assert registry.labels == ["acme:regular", "acme:bold"]
 
 
 def test_faces_missing_glyphs_are_rejected_not_dropped(font_dir: Path) -> None:
@@ -127,11 +126,15 @@ def test_registry_snapshot_roundtrip(font_dir: Path) -> None:
     build_font(font_dir / "a.ttf", chars=ALNUM, family="Acme", subfamily="Regular")
 
     registry = font_registry.scan(font_dir, charset="ascii_alnum")
-    restored = font_registry.FontRegistry.from_dict(registry.to_dict())
+    snapshot = registry.model_dump(mode="json")
+    restored = font_registry.FontRegistry.model_validate(snapshot)
 
-    assert [face.to_dict() for face in restored] == [face.to_dict() for face in registry]
-    assert restored.label_granularity == registry.label_granularity
+    assert restored.labels == registry.labels
     assert restored.charset == registry.charset
+    # Codepoints are deliberately not in the snapshot: a replayed stream needs the
+    # labels, not the ability to re-render.
+    assert "codepoints" not in snapshot["faces"][0]
+    assert restored.faces[0].codepoints == frozenset()
 
 
 def test_resolve_charset_expands_presets_and_drops_whitespace() -> None:
