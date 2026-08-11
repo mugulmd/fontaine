@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from synthetic_fonts import build_font
 
 from fontaine.config import ArrivalConfig, FontRule
@@ -273,21 +274,20 @@ def test_a_schedule_that_empties_mid_stream_is_rejected(font_dir: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("rule", "message"),
+    ("kwargs", "message"),
     [
-        (FontRule(weight=-1), "weight cannot be negative"),
-        (FontRule(start=-5), "start cannot be negative"),
-        (FontRule(start=100, stop=100), "must be after start"),
-        (FontRule(start=100, stop=50), "must be after start"),
+        ({"weight": -1}, "greater than or equal to 0"),
+        ({"start": -5}, "greater than or equal to 0"),
+        ({"start": 100, "stop": 100}, "must be after start"),
+        ({"start": 100, "stop": 50}, "must be after start"),
     ],
 )
-def test_nonsensical_rules_are_rejected(font_dir: Path, rule: FontRule, message: str) -> None:
-    faces = _pool(font_dir, 2)
-    with pytest.raises(ScheduleError, match=message):
-        _process(faces, fonts={faces[0].face_id: rule})
+def test_nonsensical_rules_are_rejected(kwargs: dict[str, Any], message: str) -> None:
+    """A rule that makes no sense on its own is rejected when the config loads."""
+    with pytest.raises(ValidationError, match=message):
+        FontRule(**kwargs)
 
 
-def test_a_negative_default_weight_is_rejected(font_dir: Path) -> None:
-    faces = _pool(font_dir, 2)
-    with pytest.raises(ScheduleError, match="default_weight"):
-        _process(faces, default_weight=-1.0)
+def test_a_negative_default_weight_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
+        ArrivalConfig(default_weight=-1.0)

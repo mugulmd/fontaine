@@ -54,11 +54,12 @@ def _load_image(path: str) -> Image.Image:
 
 
 def available_sources(config: BackgroundConfig) -> dict[str, float]:
-    """Configured sources with positive weight, minus ``photo`` if there are none."""
+    """Configured sources with positive weight, minus ``photo`` if there are none.
+
+    Source names are validated by :class:`BackgroundConfig`; what cannot be checked
+    there is whether ``photo_dir`` actually holds any images.
+    """
     usable = {name: weight for name, weight in config.sources.items() if weight > 0}
-    unknown = set(usable) - {"photo", "gradient", "solid"}
-    if unknown:
-        raise ValueError(f"unknown background sources: {sorted(unknown)}")
     if "photo" in usable and not _image_paths(str(config.photo_dir)):
         usable.pop("photo")
     if not usable:

@@ -81,11 +81,10 @@ def resolve_schedule(
 
     Raises :class:`ScheduleError` for a pattern that matches nothing, since the
     alternative is an experiment that quietly stopped being the one you designed.
+    A rule that makes no sense on its own — a negative weight, a window that
+    closes before it opens — is rejected earlier, by :class:`FontRule` itself.
     """
     settings = config or ArrivalConfig()
-    if settings.default_weight < 0:
-        raise ScheduleError(f"default_weight cannot be negative: {settings.default_weight}")
-
     matched: set[str] = set()
     schedules: list[FontSchedule] = []
     for face in faces:
@@ -94,7 +93,6 @@ def resolve_schedule(
         if pattern is not None:
             matched.add(pattern)
         weight = settings.default_weight if rule.weight is None else rule.weight
-        _validate(face.face_id, weight, rule)
         schedules.append(
             FontSchedule(
                 face_id=face.face_id,
@@ -120,18 +118,6 @@ def _best_pattern(face_id: str, rules: dict[str, FontRule]) -> str | None:
     if not candidates:
         return None
     return max(candidates, key=lambda pattern: (pattern == face_id, len(pattern)))
-
-
-def _validate(face_id: str, weight: float, rule: FontRule) -> None:
-    if weight < 0:
-        raise ScheduleError(f"{face_id}: weight cannot be negative ({weight})")
-    if rule.start < 0:
-        raise ScheduleError(f"{face_id}: start cannot be negative ({rule.start})")
-    if rule.stop is not None and rule.stop <= rule.start:
-        raise ScheduleError(
-            f"{face_id}: stop ({rule.stop}) must be after start ({rule.start}), "
-            f"otherwise the font never appears at all"
-        )
 
 
 class ArrivalProcess:

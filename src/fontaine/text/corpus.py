@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from typing import get_args
 
-from fontaine.config import CorpusConfig
+from fontaine.config import ContentKind, CorpusConfig
 
-CONTENT_KINDS = ("word", "phrase", "sentence", "number", "price", "date", "time", "token")
+#: The kinds this module can generate. Derived from the config type so the two
+#: cannot drift apart.
+CONTENT_KINDS: tuple[str, ...] = get_args(ContentKind)
 
 #: A small, deliberately mundane vocabulary. Breadth of *letter combinations*
 #: matters here, not breadth of meaning.
@@ -811,13 +814,9 @@ class Corpus:
     """Samples text, then projects it onto what a given face can draw."""
 
     def __init__(self, config: CorpusConfig | None = None) -> None:
+        # Kind and casing names are validated by CorpusConfig, so a typo is caught
+        # when the config loads rather than on the first item rendered.
         self.config = config or CorpusConfig()
-        unknown = set(self.config.kinds) - set(CONTENT_KINDS)
-        if unknown:
-            raise ValueError(f"unknown content kinds: {sorted(unknown)}")
-        unknown_casing = set(self.config.casing) - {"as_is", "title", "upper", "lower"}
-        if unknown_casing:
-            raise ValueError(f"unknown casing transforms: {sorted(unknown_casing)}")
 
     def sample(self, rng: random.Random, covered: frozenset[int] | None = None) -> TextSample:
         """Draw one piece of text, restricted to codepoints in ``covered``."""

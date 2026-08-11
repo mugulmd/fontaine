@@ -5,6 +5,7 @@ import string
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from fontaine.config import CorpusConfig, Range
 from fontaine.text.corpus import CONTENT_KINDS, Corpus
@@ -91,7 +92,8 @@ def test_numeric_kinds_are_not_recased() -> None:
 
 
 def test_unknown_kinds_and_casings_are_rejected() -> None:
-    with pytest.raises(ValueError, match="unknown content kinds"):
-        _corpus(kinds={"haiku": 1.0})
-    with pytest.raises(ValueError, match="unknown casing"):
-        _corpus(casing={"sarcastic": 1.0})
+    """Caught by the config, so a typo fails at load rather than mid-render."""
+    with pytest.raises(ValidationError, match="haiku"):
+        CorpusConfig(kinds={"haiku": 1.0})
+    with pytest.raises(ValidationError, match="sarcastic"):
+        CorpusConfig(casing={"sarcastic": 1.0})
