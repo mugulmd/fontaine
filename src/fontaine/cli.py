@@ -201,22 +201,15 @@ def preview(
             "knob for text that comes out too small.",
         ),
     ] = None,
-    from_stream: Annotated[
-        bool,
-        typer.Option(
-            "--stream/--all-faces",
-            help="Draw items from the arrival process instead of cycling every face.",
-        ),
-    ] = False,
     font_dir: FontDirOption = None,
     verbose: VerboseOption = False,
 ) -> None:
     """Render a batch of crops to a contact sheet, to check the renders by eye.
 
-    By default faces are taken in registry order and cycled, so a large enough
-    count shows every font in the label space at least once. ``--stream`` instead
-    draws the first items of the actual stream, which shows what the recognizer
-    really sees — dominated by whichever fonts arrived early.
+    Faces are taken in registry order and cycled, so a count of at least the size
+    of the label space shows every font at least once. The ``arrival`` config is
+    deliberately ignored: this is a check that every font renders, so a font made
+    rare or scheduled to arrive late still has to show up here.
     """
     settings = _load(config)
     if font_dir is not None:
@@ -245,28 +238,17 @@ def preview(
     stats: Counter[str] = Counter()
     failures: list[str] = []
 
-    if from_stream:
-        generator = _generator(settings, registry)
-        for sample in generator.take(count):
-            stats[sample.metadata["background"]] += 1
-            stats[f"kind:{sample.metadata['text_kind']}"] += 1
-            marker = " NEW" if sample.metadata["first_seen"] else ""
-            cells.append(
-                (sample.image, f"{sample.label}  {sample.metadata['cap_height_px']:.0f}px{marker}")
-            )
-        failures = [item.error for item in generator.skipped]
-    else:
-        renderer = CropRenderer(settings.render)
-        for index in range(count):
-            face = registry.faces[index % len(registry.faces)]
-            try:
-                crop = renderer.render(face, item_rng(settings.seed, index))
-            except RenderError as error:
-                failures.append(str(error))
-                continue
-            stats[crop.metadata["background"]] += 1
-            stats[f"kind:{crop.metadata['text_kind']}"] += 1
-            cells.append((crop.image, f"{face.face_id}  {crop.metadata['cap_height_px']:.0f}px"))
+    renderer = CropRenderer(settings.render)
+    for index in range(count):
+        face = registry.faces[index % len(registry.faces)]
+        try:
+            crop = renderer.render(face, item_rng(settings.seed, index))
+        except RenderError as error:
+            failures.append(str(error))
+            continue
+        stats[crop.metadata["background"]] += 1
+        stats[f"kind:{crop.metadata['text_kind']}"] += 1
+        cells.append((crop.image, f"{face.face_id}  {crop.metadata['cap_height_px']:.0f}px"))
 
     if not cells:
         console.print("[red]every render failed[/red]")
