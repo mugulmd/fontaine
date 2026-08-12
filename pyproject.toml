@@ -76,6 +76,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests read as prose already; their names say what they check.
 "tests/*" = ["D101", "D102", "D103"]
+# models/ is the challenger's own code. The framework holds itself to a docstring
+# on every public thing; making someone's experiment pass that too is not the
+# repo's business, and the class docstring shown by `fontaine models list` is the
+# only one that has a reader.
+"models/*" = ["D101", "D102", "D103"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"

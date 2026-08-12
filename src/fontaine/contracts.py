@@ -6,8 +6,9 @@ is private to one side or the other.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
@@ -68,3 +69,48 @@ class Sample(BaseModel):
     image: Image.Image
     label: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Recognizer(ABC):
+    """The one thing a challenger implements: a model that predicts, then learns.
+
+    Subclass it in a file under ``models/`` and it becomes selectable as
+    ``fontaine recognize --model <name>``. Nothing inside ``fontaine`` needs to
+    change to add one, which is the point: the framework knows about this class
+    and nothing else about your model.
+
+    Three properties the evaluation loop relies on:
+
+    * **A crop, not a** :class:`Sample`. The metadata records the exact cap
+      height, contrast and background used to draw the item, so a model handed
+      the whole sample could read the answer off the generator instead of the
+      pixels. Only the image is passed.
+    * **Test-then-train.** :meth:`predict` is always called before
+      :meth:`learn` for the same item, and the item is scored on that
+      prediction. Learning from an item you have already been scored on is
+      free; there is no way to be scored twice.
+    * **An open label set.** A font never seen before can arrive at any point,
+      and the only announcement is a :meth:`learn` call carrying its label.
+      Nothing tells you the label space up front — discovering it is the task.
+
+    The loop hands the *same* image object to :meth:`predict` and then to
+    :meth:`learn`, so work done for the prediction can be cached across the
+    pair rather than repeated; ``models/baseline.py`` does exactly that.
+    """
+
+    #: How ``--model`` names this recognizer. Required on every concrete
+    #: subclass: it is what the CLI matches against, and deriving it from the
+    #: class name would make renaming the class silently rename the model.
+    name: ClassVar[str]
+
+    @abstractmethod
+    def predict(self, image: Image.Image) -> str | None:
+        """The ``face_id`` this crop was drawn with, or ``None`` to abstain.
+
+        Abstaining is scored as a miss, not skipped — a model that never answers
+        scores zero. It exists for the honest case of having seen no labels yet.
+        """
+
+    @abstractmethod
+    def learn(self, image: Image.Image, label: str) -> None:
+        """Fold one labelled crop in. ``label`` may be a font never seen before."""

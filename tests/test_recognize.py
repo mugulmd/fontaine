@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import string
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -18,13 +19,27 @@ from fontaine.config import (
     StreamConfig,
     TypographyConfig,
 )
+from fontaine.contracts import Recognizer
 from fontaine.evaluate import prequential
 from fontaine.fonts import registry as font_registry
-from fontaine.recognize import features, models
+from fontaine.recognize import discovery, features
 from fontaine.recognize.preprocess import ink_mask
 from fontaine.stream.generator import StreamGenerator
 
 ALNUM = string.ascii_letters + string.digits
+
+#: The repo's own model directory, found from this file rather than the cwd.
+MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
+
+
+def _baseline(**kwargs) -> Any:
+    """The shipped baseline, loaded the way the CLI loads any model.
+
+    Typed loosely on purpose: the model directory is resolved at runtime, so the
+    concrete class is not importable here — only the interface it satisfies is,
+    and ``test_discovery`` is where that is asserted.
+    """
+    return discovery.discover(MODEL_DIR)["baseline"](**kwargs)
 
 
 def _crop(text: str = "Hamburg", *, dark_on_light: bool = True, size: int = 40) -> Image.Image:
@@ -133,28 +148,52 @@ def test_slant_detects_a_sheared_rendering() -> None:
     assert abs(features.describe(Image.fromarray(sheared))["slant_deg"]) > 6.0
 
 
-# ---------------------------------------------------------------------- models
+# --------------------------------------------------------------------- baseline
 
 
 def test_the_model_accepts_a_new_class_mid_stream() -> None:
     """The property the task demands: no fixed label set, no rebuild."""
-    model = models.build()
-    model.learn_one({"a": 1.0, "b": 2.0}, "roboto")
+    # Driven through the river pipeline directly: the claim under test is about
+    # the estimator's configuration, not about featurizing a crop.
+    pipeline = _baseline().pipeline
+    pipeline.learn_one({"a": 1.0, "b": 2.0}, "roboto")
 
-    assert model.predict_one({"a": 1.0, "b": 2.0}) == "roboto"
+    assert pipeline.predict_one({"a": 1.0, "b": 2.0}) == "roboto"
     # A label never seen before, arriving after the model is already trained.
-    model.learn_one({"a": 9.0, "b": 9.0}, "anton")
-    assert set(model.predict_proba_one({"a": 1.0, "b": 2.0})) == {"roboto", "anton"}
+    pipeline.learn_one({"a": 9.0, "b": 9.0}, "anton")
+    assert set(pipeline.predict_proba_one({"a": 1.0, "b": 2.0})) == {"roboto", "anton"}
 
 
 def test_only_the_recent_window_is_remembered() -> None:
     """Memory is bounded, so it does not grow with the length of the stream."""
-    model = models.build(window_size=20)
+    pipeline = _baseline(window_size=20).pipeline
     for index in range(200):
-        model.learn_one({"a": float(index)}, "early" if index < 100 else "late")
+        pipeline.learn_one({"a": float(index)}, "early" if index < 100 else "late")
 
     # The early class has been pushed out of the window entirely.
-    assert model.predict_one({"a": 1.0}) == "late"
+    assert pipeline.predict_one({"a": 1.0}) == "late"
+
+
+def test_the_crop_is_featurized_once_per_item_not_twice(monkeypatch) -> None:
+    """Predict then learn on the same object must not pay for the features twice."""
+    calls = 0
+    original = features.describe
+
+    def counted(image):
+        nonlocal calls
+        calls += 1
+        return original(image)
+
+    monkeypatch.setattr(features, "describe", counted)
+    model = _baseline()
+    crop = _crop()
+
+    model.predict(crop)
+    model.learn(crop, "roboto")
+    assert calls == 1
+    # A different crop is a different item, and must be measured afresh.
+    model.predict(_crop("Other"))
+    assert calls == 2
 
 
 # ------------------------------------------------------------------ prequential
@@ -187,7 +226,7 @@ def test_the_first_item_is_scored_before_anything_is_learned(tiny_stream) -> Non
     """Test-then-train: with nothing learned yet, the model can only abstain."""
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(12))
-    result = prequential.run(samples, models.build(), features.describe)
+    result = prequential.run(samples, _baseline())
 
     assert result.n_items == 12
     assert result.abstentions >= 1
@@ -197,26 +236,31 @@ def test_a_perfect_model_scores_one_and_a_useless_one_scores_zero(tiny_stream) -
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(20))
 
-    class Oracle:
+    class Oracle(Recognizer):
         """Answers with the previous item's label; abstains before it has one."""
 
+        name = "oracle"
         last: str | None = None
 
-        def predict_one(self, x):
+        def predict(self, image):
             return self.last
 
-        def learn_one(self, x, y):
-            self.last = y
+        def learn(self, image, label):
+            self.last = label
 
-    class Contrarian:
-        def predict_one(self, x):
+    class Contrarian(Recognizer):
+        """Always wrong, on purpose."""
+
+        name = "contrarian"
+
+        def predict(self, image):
             return "never-a-real-font"
 
-        def learn_one(self, x, y):
+        def learn(self, image, label):
             pass
 
-    oracle = prequential.run(samples, Oracle(), features.describe)  # type: ignore[arg-type]
-    contrarian = prequential.run(samples, Contrarian(), features.describe)  # type: ignore[arg-type]
+    oracle = prequential.run(samples, Oracle())
+    contrarian = prequential.run(samples, Contrarian())
 
     # The oracle only ever repeats the previous label, so it cannot be perfect —
     # but it must beat a model that is always wrong, which must score exactly zero.
@@ -228,7 +272,7 @@ def test_the_majority_baseline_is_reported_alongside(tiny_stream) -> None:
     """Accuracy means nothing without the number a model that learned nothing gets."""
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(40))
-    result = prequential.run(samples, models.build(), features.describe)
+    result = prequential.run(samples, _baseline())
 
     assert 0.0 <= result.majority_accuracy <= 1.0
     assert result.chance_accuracy == pytest.approx(1 / len(result.classes))
@@ -237,7 +281,7 @@ def test_the_majority_baseline_is_reported_alongside(tiny_stream) -> None:
 def test_per_class_bookkeeping_adds_up(tiny_stream) -> None:
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(40))
-    result = prequential.run(samples, models.build(), features.describe)
+    result = prequential.run(samples, _baseline())
 
     assert sum(report.seen for report in result.classes.values()) == result.n_items
     assert sum(report.correct for report in result.classes.values()) == result.correct
@@ -251,7 +295,7 @@ def test_discovery_lag_is_measured_from_the_scheduled_arrival(tiny_stream) -> No
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(30))
     label = samples[0].label
-    result = prequential.run(samples, models.build(), features.describe, schedule={label: 5})
+    result = prequential.run(samples, _baseline(), schedule={label: 5})
 
     report = result.classes[label]
     assert report.scheduled_start == 5

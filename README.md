@@ -36,6 +36,9 @@ Two directories you fill in:
 `configs/stream.yaml` is the single config describing a whole stream, and every
 option is commented there.
 
+Your own work goes in `models/` — one file per recognizer, discovered by scanning.
+See [Writing a recognizer](#writing-a-recognizer).
+
 ## The font registry
 
 The registry resolves `assets/fonts/` into the label space. Inspect it before
@@ -186,11 +189,68 @@ for sample in read_stream(Path("data/streams/v1")):
     model.learn(sample.image, sample.label)  # then learn from it
 ```
 
-## The recognizer
+## Writing a recognizer
 
-A demonstration baseline with no neural network in it: hand-crafted features from
+A model is a class implementing `fontaine.contracts.Recognizer`, in a file under
+`models/`. That is the whole extension point — nothing inside `src/fontaine/`
+knows your model exists, so adding one cannot perturb anyone else's.
+
+```python
+# models/my_cnn.py
+from fontaine.contracts import Recognizer
+
+
+class MyCNN(Recognizer):
+    """One line saying what this is — it shows up in `fontaine models list`."""
+
+    name = "my-cnn"  # what --model matches
+
+    def predict(self, image):  # a PIL image; None abstains
+        return self._head(self._embed(image))
+
+    def learn(self, image, label):  # label may be a font never seen before
+        self._sgd_step(image, label)
+```
+
+```sh
+uv run fontaine models list
+uv run fontaine recognize --stream data/streams/v1 --model my-cnn
+```
+
+Three rules the evaluation loop enforces, and one guarantee it gives you:
+
+- **You get the crop, never the `Sample`.** The metadata records the exact cap
+  height, contrast and background used to draw the item, so a model handed the
+  whole sample could read the answer off the generator instead of the pixels.
+- **`predict` is always called before `learn`** for the same item, and the item is
+  scored on that prediction. Test-then-train, so there is no way to be scored on
+  something you have already learned.
+- **The label space is not announced.** A font never seen before can arrive at any
+  point, and the only notice you get is a `learn` call carrying its label.
+  Discovering it is the task; anything with a fixed output layer cannot play.
+- **The same image object goes to `predict` then `learn`**, so work done for the
+  prediction can be cached across the pair instead of repeated. `models/baseline.py`
+  keys a one-entry feature cache on exactly that.
+
+Featurization is yours, not the framework's. `fontaine.recognize.features` is
+available to reuse if the hand-crafted vector is a useful starting point, but
+nothing obliges you to go through it — a model working straight off pixels is
+expressible.
+
+A model that outgrows one file can be a package instead: `models/my_cnn/__init__.py`,
+with `models/` on `sys.path` so its own helpers import normally. Files starting with
+`_` are skipped, which is the escape hatch for code shared between entries.
+
+`models/last_seen.py` is the smallest possible implementation — it repeats the
+previous label and scores 0.9x the majority baseline — if you want a template
+shorter than the baseline to copy.
+
+## The baseline
+
+A demonstration model with no neural network in it: hand-crafted features from
 the ink, fed to an online k-nearest-neighbours classifier from
-[river](https://riverml.xyz).
+[river](https://riverml.xyz). It lives in `models/baseline.py` and is found by the
+same scan as yours — it is the default for `--model`, and nothing else.
 
 ```sh
 uv run fontaine recognize --stream data/streams/v1
@@ -205,11 +265,10 @@ alternatives were tried and dropped: Gaussian naive Bayes, a Hoeffding tree and 
 adaptive forest all sat near 42% on the same stream.
 
 The reason river suits this problem is that a label it has never seen can arrive
-mid-stream and simply be learned — no output layer to resize, no retraining. Anything
-with a fixed label set cannot consume this dataset at all. Features go in as a dict,
-wrapped in river's online `StandardScaler`, which the distance metric needs: stroke
-width lives in the hundredths and slant in the tens, and unscaled the vote would be
-decided by units alone.
+mid-stream and simply be learned — no output layer to resize, no retraining. Features
+go in as a dict, wrapped in river's online `StandardScaler`, which the distance metric
+needs: stroke width lives in the hundredths and slant in the tens, and unscaled the
+vote would be decided by units alone.
 
 **Read the balanced accuracy, not the accuracy.** On an imbalanced stream the two
 diverge sharply — with one font weighted 5x, the same model scores 57.3% accuracy but
@@ -247,7 +306,7 @@ Narrowing `corpus.casing` isolates the font signal if you want to measure that g
 ## Tests and checks
 
 ```sh
-uv run pytest        # 98 tests, well under a second
+uv run pytest        # 159 tests, well under a second
 uv run ruff format   # formatting
 uv run ruff check    # linting
 uv run ty check      # type checking

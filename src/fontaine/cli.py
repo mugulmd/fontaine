@@ -18,8 +18,7 @@ from fontaine.config import DEFAULT_CONFIG_PATH, Range, StreamConfig, load_strea
 from fontaine.evaluate import prequential
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
-from fontaine.recognize import features as feature_module
-from fontaine.recognize import models as model_module
+from fontaine.recognize import discovery
 from fontaine.render import background as background_module
 from fontaine.render.textbox import CropRenderer, RenderError
 from fontaine.rng import item_rng
@@ -32,7 +31,9 @@ from fontaine.viz.contact_sheet import contact_sheet
 
 app = typer.Typer(help="Synthetic font-recognition streams.", no_args_is_help=True)
 fonts_app = typer.Typer(help="Inspect the font universe.", no_args_is_help=True)
+models_app = typer.Typer(help="Inspect the recognizers in models/.", no_args_is_help=True)
 app.add_typer(fonts_app, name="fonts")
+app.add_typer(models_app, name="models")
 
 console = Console()
 
@@ -42,6 +43,9 @@ FontDirOption = Annotated[
 ]
 VerboseOption = Annotated[
     bool, typer.Option("--verbose", help="Surface fontTools' per-table warnings.")
+]
+ModelDirOption = Annotated[
+    Path, typer.Option("--model-dir", help="Directory the recognizers are read from.")
 ]
 
 
@@ -93,6 +97,31 @@ def _scan(settings: StreamConfig, *, verbose: bool = False) -> font_registry.Fon
         console.print(f"[red]{error}[/red]")
         console.print("Drop .ttf/.otf files in, or pass --font-dir.", style="dim")
         raise typer.Exit(code=1) from error
+
+
+@models_app.command("list")
+def models_list(model_dir: ModelDirOption = discovery.DEFAULT_MODEL_DIR) -> None:
+    """List the recognizers found in the model directory."""
+    try:
+        found = discovery.discover(model_dir)
+    except discovery.ModelError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+
+    table = Table(title=f"{len(found)} models in {model_dir}", title_justify="left")
+    table.add_column("name", style="cyan")
+    table.add_column("class")
+    table.add_column("what it is", style="dim", overflow="fold")
+    for name, model in sorted(found.items()):
+        table.add_row(name, model.__qualname__, discovery.describe(model))
+    console.print(table)
+
+    if not found:
+        console.print(
+            f"drop a file in [bold]{model_dir}[/bold] subclassing "
+            "fontaine.contracts.Recognizer — see models/baseline.py",
+            style="dim",
+        )
 
 
 @fonts_app.command("scan")
@@ -367,6 +396,10 @@ def recognize(
     limit: Annotated[
         int | None, typer.Option("--limit", help="Stop after this many items of a saved stream.")
     ] = None,
+    model_name: Annotated[
+        str, typer.Option("--model", "-m", help="Which recognizer from the model dir to score.")
+    ] = "baseline",
+    model_dir: ModelDirOption = discovery.DEFAULT_MODEL_DIR,
     classes: Annotated[
         bool, typer.Option("--classes/--no-classes", help="Print the per-font table.")
     ] = True,
@@ -377,7 +410,18 @@ def recognize(
 
     Reads a saved stream with ``--stream``, or generates one on the fly from the
     config. Both paths hand the model the same items, so the numbers are comparable.
+
+    ``--model`` names any recognizer under ``models/``; ``fontaine models list``
+    prints what is there.
     """
+    # Built before the stream, so a typo in --model fails immediately rather than
+    # after minutes of generation.
+    try:
+        model = discovery.load(model_name, model_dir)
+    except discovery.ModelError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+
     schedule: dict[str, int] | None = None
     if stream is not None:
         try:
@@ -402,8 +446,7 @@ def recognize(
         total = count
         source = f"generating live from [bold]{config}[/bold]"
 
-    console.print(f"{source} — {total:,} items")
-    model = model_module.build()
+    console.print(f"{source} — {total:,} items — model [cyan]{model.name}[/cyan]")
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -416,7 +459,6 @@ def recognize(
         result = prequential.run(
             samples,
             model,
-            feature_module.describe,
             schedule=schedule,
             on_item=lambda _: progress.advance(task),
         )

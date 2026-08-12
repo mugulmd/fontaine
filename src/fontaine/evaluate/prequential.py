@@ -20,12 +20,11 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
-from PIL import Image
 from river import metrics, utils
 
-from fontaine.contracts import Sample
+from fontaine.contracts import Recognizer, Sample
 
 #: Window for the rolling accuracy, in items.
 WINDOW = 500
@@ -39,18 +38,6 @@ def _score(metric: Any) -> float:
     than sprinkling suppressions at every call.
     """
     return float(metric.get())
-
-
-class Model(Protocol):
-    """What the loop needs from a classifier: river's pipeline satisfies it."""
-
-    def predict_one(self, x: dict[str, float]) -> Any:
-        """The label this model would answer with, or None before it has seen any."""
-        ...
-
-    def learn_one(self, x: dict[str, float], y: Any) -> Any:
-        """Fold one labelled example in."""
-        ...
 
 
 @dataclass(slots=True)
@@ -119,8 +106,7 @@ class Result:
 
 def run(
     samples: Iterable[Sample],
-    model: Model,
-    featurizer: Callable[[Image.Image], dict[str, float]],
+    model: Recognizer,
     *,
     schedule: dict[str, int] | None = None,
     curve_every: int = 100,
@@ -128,9 +114,11 @@ def run(
 ) -> Result:
     """Score ``model`` over ``samples``, one item at a time.
 
-    ``featurizer`` is handed the image alone. The sample's metadata records the exact
-    cap height, contrast and background used to draw it, so a model given the whole
-    sample could read the answer rather than look at the pixels.
+    The model is handed ``sample.image`` and nothing else. The metadata records the
+    exact cap height, contrast and background used to draw it, so a model given the
+    whole sample could read the answer rather than look at the pixels — and
+    featurization is the model's business, not the loop's, or every entry would be
+    stuck with the same view of the crop.
     """
     result = Result()
     rolling = utils.Rolling(metrics.Accuracy(), window_size=WINDOW)
@@ -139,8 +127,7 @@ def run(
     label_counts: Counter[str] = Counter()
 
     for sample in samples:
-        features = featurizer(sample.image)
-        prediction = model.predict_one(features)
+        prediction = model.predict(sample.image)
 
         report = result.classes.setdefault(sample.label, ClassReport(label=sample.label))
         if report.first_seen is None:
@@ -174,7 +161,7 @@ def run(
         if on_item is not None:
             on_item(sample)
 
-        model.learn_one(features, sample.label)
+        model.learn(sample.image, sample.label)
 
     result.rolling_accuracy = _score(rolling)
     result.balanced_accuracy = _score(balanced)
