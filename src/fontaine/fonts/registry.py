@@ -16,14 +16,16 @@ from contextlib import contextmanager
 from fnmatch import fnmatch
 from pathlib import Path
 
-from fontTools.ttLib import TTCollection, TTFont, TTLibError
+from fontTools.ttLib import TTFont, TTLibError
 from pydantic import BaseModel, Field
 
 from fontaine.contracts import FontFace
 from fontaine.fonts.coverage import resolve_charset
 
-FONT_EXTENSIONS = frozenset({".ttf", ".otf", ".ttc", ".otc"})
-COLLECTION_EXTENSIONS = frozenset({".ttc", ".otc"})
+#: One file is one face. Font collections (``.ttc``/``.otc``) are not read: a
+#: file holding several faces would make the label space depend on an index into
+#: it, and every face in the universe is available as a standalone file anyway.
+FONT_EXTENSIONS = frozenset({".ttf", ".otf"})
 
 # name table IDs, typographic variants first — they are the ones that split
 # "Roboto / Condensed Bold" correctly instead of "Roboto Condensed / Bold".
@@ -168,30 +170,21 @@ def _codepoints(font: TTFont) -> frozenset[int]:
     return frozenset(cmap) if cmap else frozenset()
 
 
-def _read_faces(path: Path) -> list[FontFace]:
-    """Extract every face in a font file.
+def _read_face(path: Path) -> FontFace:
+    """Extract the face metadata from a font file.
 
-    Metadata is pulled eagerly and the file closed before returning: the fonts
-    are opened lazily, so a ``TTFont`` outliving its file handle would fail on
-    the next table access.
+    Metadata is pulled eagerly and the file closed before returning: the font is
+    opened lazily, so a ``TTFont`` outliving its file handle would fail on the
+    next table access.
     """
-    if path.suffix.lower() in COLLECTION_EXTENSIONS:
-        collection = TTCollection(path, lazy=True)
-        try:
-            return [
-                _face_from_font(font, path, font_number)
-                for font_number, font in enumerate(collection.fonts)
-            ]
-        finally:
-            collection.close()
-    font = TTFont(path, fontNumber=0, lazy=True)
+    font = TTFont(path, lazy=True)
     try:
-        return [_face_from_font(font, path, 0)]
+        return _face_from_font(font, path)
     finally:
         font.close()
 
 
-def _face_from_font(font: TTFont, path: Path, font_number: int) -> FontFace:
+def _face_from_font(font: TTFont, path: Path) -> FontFace:
     family = _name(font, _NAME_FAMILY) or path.stem
     subfamily = _name(font, _NAME_SUBFAMILY) or "Regular"
     head = font.get("head")
@@ -203,7 +196,6 @@ def _face_from_font(font: TTFont, path: Path, font_number: int) -> FontFace:
         family=family,
         subfamily=subfamily,
         path=path,
-        font_number=font_number,
         weight=_weight(font, subfamily),
         width_class=getattr(os2, "usWidthClass", 5) if os2 is not None else 5,
         italic=_is_italic(font),
@@ -260,39 +252,38 @@ def scan(
     for path in iter_font_files(font_dir, exclude):
         try:
             with quiet_fonttools(not verbose):
-                parsed = _read_faces(path)
+                face = _read_face(path)
         except (TTLibError, OSError, ValueError, KeyError, IndexError, AssertionError) as error:
             unreadable.append(UnreadableFile(path=path, error=f"{type(error).__name__}: {error}"))
             continue
 
-        for face in parsed:
-            used_ids[face.face_id] += 1
-            occurrence = used_ids[face.face_id]
-            if occurrence > 1:
-                # Two files claiming the same family+style. Keep both, disambiguated,
-                # rather than letting one shadow the other.
-                face = face.model_copy(update={"face_id": f"{face.face_id}#{occurrence}"})
+        used_ids[face.face_id] += 1
+        occurrence = used_ids[face.face_id]
+        if occurrence > 1:
+            # Two files claiming the same family+style. Keep both, disambiguated,
+            # rather than letting one shadow the other.
+            face = face.model_copy(update={"face_id": f"{face.face_id}#{occurrence}"})
 
-            if face.variable and not include_variable:
-                rejected.append(
-                    RejectedFace(
-                        face=face,
-                        reason="variable-font",
-                        detail="static instances only in v1",
-                    )
+        if face.variable and not include_variable:
+            rejected.append(
+                RejectedFace(
+                    face=face,
+                    reason="variable-font",
+                    detail="static instances only in v1",
                 )
-                continue
-            missing = face.missing_from(required)
-            if missing:
-                rejected.append(
-                    RejectedFace(
-                        face=face,
-                        reason="missing-glyphs",
-                        detail=f"{len(missing)} missing: {missing[:24]}",
-                    )
+            )
+            continue
+        missing = face.missing_from(required)
+        if missing:
+            rejected.append(
+                RejectedFace(
+                    face=face,
+                    reason="missing-glyphs",
+                    detail=f"{len(missing)} missing: {missing[:24]}",
                 )
-                continue
-            faces.append(face)
+            )
+            continue
+        faces.append(face)
 
     return FontRegistry(
         faces=faces,

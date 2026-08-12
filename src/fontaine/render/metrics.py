@@ -23,24 +23,24 @@ _CAP_PROBES = ("H", "E", "X", "h", "x", "0")
 
 
 @lru_cache(maxsize=512)
-def _load(path: str, font_number: int, em_px: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(path, size=em_px, index=font_number)
+def _load(path: str, em_px: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(path, size=em_px)
 
 
 def load_font(face: FontFace, em_px: int) -> ImageFont.FreeTypeFont:
     """Load a face at an em size in pixels. Cached — loading dominates otherwise."""
-    return _load(str(face.path), face.font_number, max(1, int(em_px)))
+    return _load(str(face.path), max(1, int(em_px)))
 
 
 @lru_cache(maxsize=512)
-def _cap_ratio(path: str, font_number: int) -> float:
-    font = _load(path, font_number, PROBE_EM)
+def _cap_ratio(path: str) -> float:
+    font = _load(path, PROBE_EM)
     for probe in _CAP_PROBES:
         box = font.getbbox(probe)
         height = box[3] - box[1]
         if height > 0:
             return height / PROBE_EM
-    raise ValueError(f"cannot measure cap height for {path}[{font_number}]")
+    raise ValueError(f"cannot measure cap height for {path}")
 
 
 def cap_height_ratio(face: FontFace) -> float:
@@ -49,7 +49,7 @@ def cap_height_ratio(face: FontFace) -> float:
     Measured rather than read from ``OS/2.sCapHeight``, which many fonts either
     omit or fill in wrongly.
     """
-    return _cap_ratio(str(face.path), face.font_number)
+    return _cap_ratio(str(face.path))
 
 
 def em_size_for_cap_height(face: FontFace, cap_height_px: float) -> int:

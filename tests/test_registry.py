@@ -4,7 +4,7 @@ import string
 from pathlib import Path
 
 import pytest
-from synthetic_fonts import build_collection, build_font
+from synthetic_fonts import build_font
 
 from fontaine.fonts import registry as font_registry
 from fontaine.fonts.coverage import CHARSET_PRESETS, resolve_charset
@@ -33,7 +33,6 @@ def test_scan_extracts_face_metadata(font_dir: Path) -> None:
     assert bold.italic is True
     assert bold.family == "Acme Grotesk"
     assert bold.units_per_em == 1000
-    assert bold.font_number == 0
     assert registry.by_face_id()["acme-grotesk:regular"].italic is False
 
 
@@ -70,19 +69,17 @@ def test_duplicate_family_and_style_get_disambiguated(font_dir: Path) -> None:
     assert registry.labels == ["twin:regular", "twin:regular#2"]
 
 
-def test_collections_expand_to_one_face_per_index(font_dir: Path) -> None:
-    build_collection(
-        font_dir / "bundle.ttc",
-        [
-            {"chars": ALNUM, "family": "Bundled", "subfamily": "Regular"},
-            {"chars": ALNUM, "family": "Bundled", "subfamily": "Bold", "weight": 700},
-        ],
-    )
+def test_font_collections_are_not_read_at_all(font_dir: Path) -> None:
+    build_font(font_dir / "solo.ttf", chars=ALNUM, family="Solo", subfamily="Regular")
+    (font_dir / "bundle.ttc").write_bytes(b"ttcf")
 
     registry = font_registry.scan(font_dir, charset="ascii_alnum")
 
-    assert sorted(registry.labels) == ["bundled:bold", "bundled:regular"]
-    assert sorted(face.font_number for face in registry) == [0, 1]
+    # Not merely rejected: a collection is outside the scanned extensions, so it
+    # never reaches the parser and is not reported as an unreadable file either.
+    assert registry.labels == ["solo:regular"]
+    assert registry.rejected == []
+    assert registry.unreadable == []
 
 
 def test_unreadable_files_are_reported(font_dir: Path) -> None:

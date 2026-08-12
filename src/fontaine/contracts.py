@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class FontFace(BaseModel):
-    """A single renderable font face: one file, or one index inside a ``.ttc``.
+    """A single renderable font face: one ``.ttf`` or ``.otf`` file.
 
     ``face_id`` is the classification label — a stable slug derived from the
     font's ``name`` table, so it survives the file being moved or renamed.
@@ -25,9 +25,6 @@ class FontFace(BaseModel):
     family: str
     subfamily: str
     path: Path
-    #: Index of this face inside a ``.ttc``/``.otc`` collection, 0 for a plain file.
-    #: Needed to load the right face back out of the file.
-    font_number: int = 0
     weight: int
     width_class: int
     italic: bool

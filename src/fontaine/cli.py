@@ -617,16 +617,13 @@ def _faces_table(registry: font_registry.FontRegistry) -> Table:
                 "V" if face.variable else "·",
             )
         )
-        name = face.path.name
-        if face.font_number:
-            name = f"{name}[{face.font_number}]"
         table.add_row(
             face.face_id,
             str(face.weight),
             str(face.width_class),
             flags,
             str(face.n_glyphs),
-            name,
+            face.path.name,
         )
     return table
 

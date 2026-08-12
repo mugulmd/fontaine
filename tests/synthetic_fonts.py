@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTCollection, TTFont
+from fontTools.ttLib import TTFont
 
 UPEM = 1000
 
@@ -41,15 +41,6 @@ def build_font(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     font.save(path)
-    return path
-
-
-def build_collection(path: Path, faces: list[dict]) -> Path:
-    """Write a ``.ttc`` bundling one face per entry in ``faces``."""
-    collection = TTCollection()
-    collection.fonts = [_make_font(**face) for face in faces]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    collection.save(str(path))
     return path
 
 
