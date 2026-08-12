@@ -2,8 +2,6 @@
 
 Online font recognition over a stream of text-box crops.
 
-## Get a model scored in five minutes
-
 ```sh
 uv sync                                             # 1. install
 uv run fontaine fonts scan                          # 2. see your label space
@@ -55,3 +53,5 @@ Useful while iterating:
 | `fontaine recognize -c configs/stream.yaml -n 5000` | score against a live stream instead of a saved one |
 | `fontaine recognize --stream … --limit 500` | short run while debugging |
 | `pytest` / `ruff check` / `ty check` | tests, lint, types |
+
+Once your model works and you have some performance metrics to show, open up a PR!
