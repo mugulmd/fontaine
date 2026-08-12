@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import string
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
+from river import metrics as river_metrics
 from synthetic_fonts import build_font
 
 from fontaine.config import (
@@ -222,6 +224,15 @@ def tiny_stream(font_dir: Path) -> tuple[StreamConfig, font_registry.FontRegistr
     return settings, font_registry.scan(font_dir, charset="ascii_alnum")
 
 
+def _abstentions(scores: prequential.Scores) -> int:
+    """Items the model declined to answer, read out of the sentinel column."""
+    return sum(
+        int(count)
+        for (_, predicted), count in scores.worst_confusions(limit=10_000)
+        if predicted == prequential.ABSTAINED
+    )
+
+
 def test_the_first_item_is_scored_before_anything_is_learned(tiny_stream) -> None:
     """Test-then-train: with nothing learned yet, the model can only abstain."""
     settings, registry = tiny_stream
@@ -229,7 +240,33 @@ def test_the_first_item_is_scored_before_anything_is_learned(tiny_stream) -> Non
     result = prequential.run(samples, _baseline())
 
     assert result.n_items == 12
-    assert result.abstentions >= 1
+    # Abstaining is a miss, not a skip: it lands in the matrix and costs accuracy.
+    assert _abstentions(result.overall) >= 1
+    assert result.overall.accuracy < 1.0
+
+
+def test_abstaining_never_becomes_a_font(tiny_stream) -> None:
+    """The sentinel is a column of the matrix, so it must not join the label space."""
+    settings, registry = tiny_stream
+    samples = list(StreamGenerator(settings, registry).take(30))
+
+    class Mute(Recognizer):
+        """Never answers."""
+
+        name = "mute"
+
+        def predict(self, image):
+            return None
+
+        def learn(self, image, label):
+            pass
+
+    result = prequential.run(samples, Mute())
+
+    assert prequential.ABSTAINED not in result.overall.labels
+    assert result.overall.accuracy == 0.0
+    # Three fonts in the stream, so chance is a third — the sentinel is not a fourth.
+    assert result.chance_accuracy == pytest.approx(1 / 3)
 
 
 def test_a_perfect_model_scores_one_and_a_useless_one_scores_zero(tiny_stream) -> None:
@@ -264,8 +301,10 @@ def test_a_perfect_model_scores_one_and_a_useless_one_scores_zero(tiny_stream) -
 
     # The oracle only ever repeats the previous label, so it cannot be perfect —
     # but it must beat a model that is always wrong, which must score exactly zero.
-    assert contrarian.accuracy == 0.0
-    assert oracle.accuracy > contrarian.accuracy
+    assert contrarian.overall.accuracy == 0.0
+    assert oracle.overall.accuracy > contrarian.overall.accuracy
+    # Answering a font that is not in the stream is a column, never a row.
+    assert "never-a-real-font" not in contrarian.overall.labels
 
 
 def test_the_majority_baseline_is_reported_alongside(tiny_stream) -> None:
@@ -275,47 +314,78 @@ def test_the_majority_baseline_is_reported_alongside(tiny_stream) -> None:
     result = prequential.run(samples, _baseline())
 
     assert 0.0 <= result.majority_accuracy <= 1.0
-    assert result.chance_accuracy == pytest.approx(1 / len(result.classes))
+    assert result.chance_accuracy == pytest.approx(1 / len(result.overall.labels))
 
 
-def test_per_class_bookkeeping_adds_up(tiny_stream) -> None:
+def test_per_font_counts_add_up_to_the_totals(tiny_stream) -> None:
     settings, registry = tiny_stream
     samples = list(StreamGenerator(settings, registry).take(40))
     result = prequential.run(samples, _baseline())
+    scores = result.overall
 
-    assert sum(report.seen for report in result.classes.values()) == result.n_items
-    assert sum(report.correct for report in result.classes.values()) == result.correct
-    for report in result.classes.values():
-        assert report.first_seen is not None
-        if report.first_correct is not None:
-            assert report.first_correct >= report.first_seen
+    assert sum(scores.support(label) for label in scores.labels) == result.n_items
+    correct = sum(scores.correct(label) for label in scores.labels)
+    assert scores.accuracy == pytest.approx(correct / result.n_items)
 
 
-def test_discovery_lag_is_measured_from_the_scheduled_arrival(tiny_stream) -> None:
+# The whole point of reading everything off one matrix is that the numbers stay the
+# ones everybody means by those names. These pin that down against river's own.
+
+
+def test_the_derived_metrics_agree_with_rivers_own() -> None:
+    """Accuracy, balanced accuracy and macro F1 are read off the matrix, not tracked."""
+    labels = ["a", "b", "c", "d"]
+    random.seed(0)
+    pairs = [(random.choice(labels), random.choice(labels)) for _ in range(300)]
+
+    matrix = river_metrics.ConfusionMatrix()
+    accuracy = river_metrics.Accuracy()
+    balanced = river_metrics.BalancedAccuracy()
+    macro_f1 = river_metrics.MacroF1()
+    for true, predicted in pairs:
+        for metric in (matrix, accuracy, balanced, macro_f1):
+            metric.update(true, predicted)
+
+    scores = prequential.Scores(matrix)
+
+    assert scores.accuracy == pytest.approx(accuracy.get())
+    assert scores.balanced_accuracy == pytest.approx(balanced.get())
+    assert scores.macro_f1 == pytest.approx(macro_f1.get())
+
+
+def test_the_recent_window_forgets_what_the_lifetime_matrix_keeps(tiny_stream) -> None:
+    """The two matrices exist to disagree — a learner's whole story is in the gap."""
     settings, registry = tiny_stream
-    samples = list(StreamGenerator(settings, registry).take(30))
-    label = samples[0].label
-    result = prequential.run(samples, _baseline(), schedule={label: 5})
+    samples = list(StreamGenerator(settings, registry).take(prequential.WINDOW + 200))
 
-    report = result.classes[label]
-    assert report.scheduled_start == 5
-    if report.first_correct is not None:
-        assert report.discovery_lag == report.first_correct - 5
+    class LateBloomer(Recognizer):
+        """Wrong on purpose until the window has moved past the early items."""
+
+        name = "late-bloomer"
+
+        def __init__(self) -> None:
+            self.seen = 0
+            self.last: str | None = None
+
+        def predict(self, image):
+            return self.last if self.seen > 400 else "never-a-real-font"
+
+        def learn(self, image, label):
+            self.seen += 1
+            self.last = label
+
+    result = prequential.run(samples, LateBloomer())
+
+    assert result.recent.n_items == prequential.WINDOW
+    assert result.overall.n_items == prequential.WINDOW + 200
+    # The early failures are still in the lifetime matrix and gone from the window.
+    assert result.recent.accuracy > result.overall.accuracy
 
 
-def test_schedule_is_read_from_a_manifest() -> None:
-    manifest = {
-        "schedule": [
-            {"face_id": "roboto:regular", "start": 0},
-            {"face_id": "roboto:bold", "start": 900},
-            {"face_id": "anton:regular", "start": 400},
-        ]
-    }
+def test_the_curve_samples_the_rolling_accuracy(tiny_stream) -> None:
+    settings, registry = tiny_stream
+    samples = list(StreamGenerator(settings, registry).take(40))
+    result = prequential.run(samples, _baseline(), curve_every=10)
 
-    starts = prequential.schedule_from_manifest(manifest)
-
-    assert starts == {"roboto:regular": 0, "roboto:bold": 900, "anton:regular": 400}
-
-
-def test_schedule_from_a_manifest_without_one_is_empty() -> None:
-    assert prequential.schedule_from_manifest({}) == {}
+    assert [n_items for n_items, _ in result.accuracy_curve] == [10, 20, 30, 40]
+    assert all(0.0 <= value <= 1.0 for _, value in result.accuracy_curve)

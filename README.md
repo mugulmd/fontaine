@@ -172,8 +172,8 @@ The manifest is written last, so a directory with a manifest is a complete strea
 and an interrupted run cannot be mistaken for a finished one. It carries both halves
 of the ground truth: the resolved `schedule` (the item each font was *meant* to
 arrive at) and `arrival.face_first_seen` (the item it *actually* first appeared at). A rare
-font allowed from item 3000 may not be drawn until 3200, so scoring detection lag
-needs the former as the baseline.
+font allowed from item 3000 may not be drawn until 3200, and the two halves are what
+tell those apart.
 
 **The stream is an iterator, not a directory.** `StreamGenerator` yields
 `Sample`s lazily and `store.reader.read_stream` yields the identical objects from
@@ -245,6 +245,34 @@ with `models/` on `sys.path` so its own helpers import normally. Files starting 
 previous label and scores 0.9x the majority baseline — if you want a template
 shorter than the baseline to copy.
 
+## How a run is scored
+
+Every number `fontaine recognize` prints is read off a **confusion matrix**. Accuracy,
+balanced accuracy, macro F1 and the per-font recall and precision are all functions of
+the same counts, so there is one place for a number to be wrong rather than four, and a
+metric added later is a function over the matrix rather than another counter in the loop.
+
+There are two matrices, because they answer different questions and neither derives from
+the other:
+
+- the **lifetime** one, over every item — it never forgets, so it carries the cold start
+  for the whole run;
+- the **rolling** one, over the last 500 items — it has already forgotten it.
+
+That is what the two columns of the headline table are, and reading across a row is the
+point. A model still climbing shows a recent column well above its overall one; a model
+that converged somewhere mediocre shows both the same. Averaged into a single lifetime
+number, a fast learner and a slow one are hard to tell apart at 100k items.
+
+One number cannot come from a matrix and is tracked beside them: the **majority
+baseline**, what always answering with the commonest label so far would have scored. It
+depends on the order the labels arrived in, not just the final counts.
+
+The per-font table reports recall *and* precision, because either alone is easy to game.
+A model that over-answers one font scores high recall there and precision on the floor —
+on the twelve-font pool the baseline does exactly that with Bebas Neue, 77% recall against
+42% precision, which the recall column alone would have shown as a strength.
+
 ## The baseline
 
 A demonstration model with no neural network in it: hand-crafted features from
@@ -291,10 +319,6 @@ light-on-dark as often as the reverse and every feature would otherwise flip. An
 the mask is trimmed to the ink, so the crop jitter the generator introduces on
 purpose cannot shift the measurements.
 
-`fontaine recognize` also reports, per font, the item it was **scheduled** to arrive
-at, the item it first actually appeared at, and the item it was first predicted
-correctly — the discovery lag the stream design exists to measure.
-
 ### What the baseline cannot do
 
 The confusions are concentrated in the four plain sans faces — Roboto, Nunito,
@@ -306,7 +330,7 @@ Narrowing `corpus.casing` isolates the font signal if you want to measure that g
 ## Tests and checks
 
 ```sh
-uv run pytest        # 159 tests, well under a second
+uv run pytest        # 160 tests, well under a second
 uv run ruff format   # formatting
 uv run ruff check    # linting
 uv run ty check      # type checking

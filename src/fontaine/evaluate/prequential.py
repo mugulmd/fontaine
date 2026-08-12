@@ -4,15 +4,23 @@ The only honest way to score an online learner. Every item is a test case before
 is a training example, so nothing is ever scored on data it has already seen, and
 there is no split to get wrong.
 
-Two things are reported alongside accuracy, because accuracy on its own says very
-little on this dataset:
+Every number here is read off a confusion matrix. Accuracy, balanced accuracy, macro
+F1 and the per-font breakdown are all functions of the same counts, so there is one
+place for a number to be wrong rather than four, and a metric added later is a
+function over the matrix rather than another ``update`` call in the loop.
 
-* **what a trivial model would score.** Always answering with the commonest label
-  so far is a real strategy, and on a deliberately imbalanced stream it can look
-  respectable. A model that cannot beat it has learned nothing.
-* **discovery lag.** How long after a font was *scheduled* to arrive the model
-  first got it right. That is the question the whole stream design exists to ask,
-  and average accuracy hides it completely.
+Two matrices, because they answer different questions and neither derives from the
+other: one over the whole run, one over the last :data:`WINDOW` items. The lifetime
+matrix never forgets, so it carries the cold start forever; the rolling one has
+already forgotten it. A model that was lost for its first few thousand items and is
+near-perfect now reads as mediocre on the first and excellent on the second, and it
+takes both to tell it apart from one that is uniformly mediocre.
+
+One number cannot come from a matrix and is tracked beside them: what always
+answering with the commonest label so far would have scored. That depends on the
+order the labels arrived in, not just the final counts. It is worth the two lines
+because on a deliberately imbalanced stream it can look respectable, and a model
+that cannot beat it has learned nothing.
 """
 
 from __future__ import annotations
@@ -26,68 +34,120 @@ from river import metrics, utils
 
 from fontaine.contracts import Recognizer, Sample
 
-#: Window for the rolling accuracy, in items.
+#: Window for the rolling matrix, in items.
 WINDOW = 500
 
+#: Stands in for a prediction the model declined to make. It is a column of the
+#: matrix and never a row: abstaining is scored as a miss so it has to be counted
+#: somewhere, but "no answer" is not a font and must not become a class — it would
+#: sit in the macro average with no support and drag every per-font number down.
+ABSTAINED = "∅"
 
-def _score(metric: Any) -> float:
-    """Read a river metric's value.
 
-    River's ``Rolling`` proxies attribute access to the metric it wraps, so its
-    ``get`` cannot be resolved statically; the boundary is typed loosely here rather
-    than sprinkling suppressions at every call.
+@dataclass(frozen=True, slots=True)
+class Scores:
+    """Everything one confusion matrix has to say.
+
+    Wraps a river ``ConfusionMatrix`` — or a ``Rolling`` around one, which proxies
+    attribute access to the metric it wraps and so cannot be resolved statically.
+    The loose type is the boundary; nothing past this class touches river.
     """
-    return float(metric.get())
 
+    matrix: Any
 
-@dataclass(slots=True)
-class ClassReport:
-    """How one font fared."""
+    @property
+    def labels(self) -> list[str]:
+        """The fonts actually seen, commonest first.
 
-    label: str
-    seen: int = 0
-    correct: int = 0
-    #: Item the label first appeared at, and the item it was first predicted right.
-    first_seen: int | None = None
-    first_correct: int | None = None
-    #: Item the schedule allowed it from, when the stream recorded one.
-    scheduled_start: int | None = None
+        Read off the rows, so :data:`ABSTAINED` — which only ever appears as a
+        column — is not among them. Rows that have fallen out of a rolling window
+        keep their key with a count of zero, and are dropped here too.
+        """
+        rows = {label: total for label, total in self.matrix.sum_row.items() if total > 0}
+        return sorted(rows, key=lambda label: -rows[label])
+
+    @property
+    def n_items(self) -> int:
+        """Items counted in this matrix."""
+        return int(self.matrix.total_weight)
 
     @property
     def accuracy(self) -> float:
-        """Share of this font's items that were predicted correctly."""
-        return self.correct / self.seen if self.seen else 0.0
+        """Share of items predicted correctly, abstentions counting against."""
+        return self._correct / self.n_items if self.n_items else 0.0
 
     @property
-    def discovery_lag(self) -> int | None:
-        """Items between the intended arrival and the first correct prediction."""
-        if self.first_correct is None:
-            return None
-        baseline = self.scheduled_start if self.scheduled_start is not None else self.first_seen
-        return None if baseline is None else self.first_correct - baseline
+    def balanced_accuracy(self) -> float:
+        """Mean recall over fonts, so a rare font weighs as much as a common one."""
+        labels = self.labels
+        return sum(self.recall(label) for label in labels) / len(labels) if labels else 0.0
+
+    @property
+    def macro_f1(self) -> float:
+        """Mean per-font F1: unlike recall, it also punishes over-predicting a font."""
+        labels = self.labels
+        return sum(self.f1(label) for label in labels) / len(labels) if labels else 0.0
+
+    def support(self, label: str) -> int:
+        """Items whose true font was ``label``."""
+        return int(self.matrix.sum_row.get(label, 0.0))
+
+    def correct(self, label: str) -> int:
+        """Items of ``label`` predicted correctly."""
+        return int(self._cell(label, label))
+
+    def recall(self, label: str) -> float:
+        """Share of this font's items that were caught."""
+        support = self.support(label)
+        return self.correct(label) / support if support else 0.0
+
+    def precision(self, label: str) -> float:
+        """Share of the guesses of this font that were right."""
+        predicted = int(self.matrix.sum_col.get(label, 0.0))
+        return self.correct(label) / predicted if predicted else 0.0
+
+    def f1(self, label: str) -> float:
+        """Harmonic mean of this font's precision and recall."""
+        precision, recall = self.precision(label), self.recall(label)
+        total = precision + recall
+        return 2 * precision * recall / total if total else 0.0
+
+    def worst_confusions(self, limit: int = 5) -> list[tuple[tuple[str, str], int]]:
+        """The commonest (true font, answered) mistakes, abstentions included."""
+        mistakes = {
+            (true, predicted): int(count)
+            for true, row in self.matrix.data.items()
+            for predicted, count in row.items()
+            if predicted != true and count > 0
+        }
+        return sorted(mistakes.items(), key=lambda item: -item[1])[:limit]
+
+    @property
+    def _correct(self) -> int:
+        return sum(self.correct(label) for label in self.labels)
+
+    def _cell(self, true: str, predicted: str) -> float:
+        # Through .get rather than matrix[true][predicted]: the matrix is a
+        # defaultdict, so indexing a cell that has never been filled creates it.
+        return self.matrix.data.get(true, {}).get(predicted, 0.0)
 
 
 @dataclass(slots=True)
 class Result:
     """Everything the run measured."""
 
-    n_items: int = 0
-    correct: int = 0
-    #: Correct answers a "always say the commonest label so far" strategy would get.
+    #: Over the whole stream, and over the last :data:`WINDOW` items.
+    overall: Scores
+    recent: Scores
+    #: Correct answers "always say the commonest label so far" would have got.
     majority_correct: int = 0
-    #: Items where the model had nothing to say, having seen no labels yet.
-    abstentions: int = 0
+    #: Rolling accuracy, sampled as the run goes: the shape of the learning curve.
     accuracy_curve: list[tuple[int, float]] = field(default_factory=list)
-    classes: dict[str, ClassReport] = field(default_factory=dict)
-    confusions: Counter[tuple[str, str]] = field(default_factory=Counter)
-    rolling_accuracy: float = 0.0
-    balanced_accuracy: float = 0.0
-    macro_f1: float = 0.0
 
     @property
-    def accuracy(self) -> float:
-        """Share of all items predicted correctly, abstentions counting against."""
-        return self.correct / self.n_items if self.n_items else 0.0
+    def n_items(self) -> int:
+        """Items scored."""
+        return self.overall.n_items
 
     @property
     def majority_accuracy(self) -> float:
@@ -96,19 +156,15 @@ class Result:
 
     @property
     def chance_accuracy(self) -> float:
-        """What guessing uniformly among the labels seen would score."""
-        return 1.0 / len(self.classes) if self.classes else 0.0
-
-    def worst_confusions(self, limit: int = 5) -> list[tuple[tuple[str, str], int]]:
-        """The commonest (true label, predicted label) mistakes."""
-        return self.confusions.most_common(limit)
+        """What guessing uniformly among the fonts seen would score."""
+        labels = self.overall.labels
+        return 1.0 / len(labels) if labels else 0.0
 
 
 def run(
     samples: Iterable[Sample],
     model: Recognizer,
     *,
-    schedule: dict[str, int] | None = None,
     curve_every: int = 100,
     on_item: Callable[[Sample], None] | None = None,
 ) -> Result:
@@ -120,55 +176,27 @@ def run(
     featurization is the model's business, not the loop's, or every entry would be
     stuck with the same view of the crop.
     """
-    result = Result()
-    rolling = utils.Rolling(metrics.Accuracy(), window_size=WINDOW)
-    balanced = metrics.BalancedAccuracy()
-    macro_f1 = metrics.MacroF1()
+    overall = metrics.ConfusionMatrix()
+    recent = utils.Rolling(metrics.ConfusionMatrix(), window_size=WINDOW)
+    result = Result(overall=Scores(overall), recent=Scores(recent))
     label_counts: Counter[str] = Counter()
 
     for sample in samples:
         prediction = model.predict(sample.image)
-
-        report = result.classes.setdefault(sample.label, ClassReport(label=sample.label))
-        if report.first_seen is None:
-            report.first_seen = sample.index
-            if schedule is not None:
-                report.scheduled_start = schedule.get(sample.label)
-        report.seen += 1
-
         # Score before learning: the item is a test case first, a lesson second.
-        if prediction is None:
-            result.abstentions += 1
-        else:
-            if prediction == sample.label:
-                result.correct += 1
-                report.correct += 1
-                if report.first_correct is None:
-                    report.first_correct = sample.index
-            else:
-                result.confusions[(sample.label, prediction)] += 1
-            rolling.update(sample.label, prediction)
-            balanced.update(sample.label, prediction)
-            macro_f1.update(sample.label, prediction)
+        answer = ABSTAINED if prediction is None else prediction
+        overall.update(sample.label, answer)
+        recent.update(sample.label, answer)
 
         if label_counts:
             result.majority_correct += label_counts.most_common(1)[0][0] == sample.label
         label_counts[sample.label] += 1
-        result.n_items += 1
 
         if result.n_items % curve_every == 0:
-            result.accuracy_curve.append((result.n_items, _score(rolling)))
+            result.accuracy_curve.append((result.n_items, result.recent.accuracy))
         if on_item is not None:
             on_item(sample)
 
         model.learn(sample.image, sample.label)
 
-    result.rolling_accuracy = _score(rolling)
-    result.balanced_accuracy = _score(balanced)
-    result.macro_f1 = _score(macro_f1)
     return result
-
-
-def schedule_from_manifest(manifest: dict[str, Any]) -> dict[str, int]:
-    """Map label → the item its schedule allowed it from."""
-    return {plan["face_id"]: int(plan["start"]) for plan in manifest.get("schedule", [])}

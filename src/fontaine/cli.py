@@ -422,7 +422,6 @@ def recognize(
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1) from error
 
-    schedule: dict[str, int] | None = None
     if stream is not None:
         try:
             manifest = store_reader.read_manifest(stream)
@@ -430,7 +429,6 @@ def recognize(
             console.print(f"[red]{error}[/red]")
             raise typer.Exit(code=1) from error
         total = manifest["n_items"] if limit is None else min(limit, manifest["n_items"])
-        schedule = prequential.schedule_from_manifest(manifest)
         samples = store_reader.read_stream(stream)
         if limit is not None:
             samples = islice(samples, limit)
@@ -441,7 +439,6 @@ def recognize(
             settings.fonts.font_dir = font_dir
         registry = _scan(settings, verbose=verbose)
         generator = _generator(settings, registry)
-        schedule = {plan.face_id: plan.start for plan in generator.arrivals.schedule}
         samples = generator.take(count)
         total = count
         source = f"generating live from [bold]{config}[/bold]"
@@ -459,74 +456,100 @@ def recognize(
         result = prequential.run(
             samples,
             model,
-            schedule=schedule,
             on_item=lambda _: progress.advance(task),
         )
 
     console.print(_headline_table(result))
     if classes:
         console.print(_classes_table(result))
-    if result.confusions:
-        worst = "   ".join(
-            f"{true.split(':')[0]}→{predicted.split(':')[0]} {n}"
-            for (true, predicted), n in result.worst_confusions(5)
+    worst = result.overall.worst_confusions(5)
+    if worst:
+        summary = "   ".join(
+            f"{true.split(':')[0]}→{predicted.split(':')[0]} {n}" for (true, predicted), n in worst
         )
-        console.print(f"most confused: {worst}", style="dim")
+        console.print(f"most confused: {summary}", style="dim")
 
 
 def _headline_table(result: prequential.Result) -> Table:
-    """Accuracy beside what a model that learned nothing would have scored."""
+    """The lifetime and recent scores side by side, beside what learning nothing gets.
+
+    Both columns come from the same three formulas over two confusion matrices. Read
+    across a row rather than down: a model still climbing shows a recent column well
+    above its overall one, which is exactly what separates a slow learner from a
+    model that has converged somewhere mediocre.
+    """
     table = Table(title="prequential score", title_justify="left", header_style="bold")
     table.add_column("measure")
-    table.add_column("value", justify="right")
+    table.add_column("overall", justify="right")
+    table.add_column(f"last {prequential.WINDOW:,}", justify="right")
     table.add_column("meaning", style="dim", overflow="fold")
 
-    lift = result.accuracy / result.majority_accuracy if result.majority_accuracy else float("inf")
+    overall, recent = result.overall, result.recent
+    lift = overall.accuracy / result.majority_accuracy if result.majority_accuracy else float("inf")
     rows = [
         (
             "accuracy",
-            f"{result.accuracy:.1%}",
-            "predicted before being told, over the whole stream",
+            f"{overall.accuracy:.1%}",
+            f"{recent.accuracy:.1%}",
+            "predicted before being told",
         ),
-        ("recent accuracy", f"{result.rolling_accuracy:.1%}", f"last {prequential.WINDOW} items"),
-        ("balanced accuracy", f"{result.balanced_accuracy:.1%}", "averaged over fonts, not items"),
-        ("macro F1", f"{result.macro_f1:.1%}", "penalises ignoring the rare fonts"),
+        (
+            "balanced accuracy",
+            f"{overall.balanced_accuracy:.1%}",
+            f"{recent.balanced_accuracy:.1%}",
+            "averaged over fonts, not items",
+        ),
+        (
+            "macro F1",
+            f"{overall.macro_f1:.1%}",
+            f"{recent.macro_f1:.1%}",
+            "penalises ignoring the rare fonts",
+        ),
         (
             "majority baseline",
             f"{result.majority_accuracy:.1%}",
+            "",
             "always answer the commonest font",
         ),
-        ("chance baseline", f"{result.chance_accuracy:.1%}", "guess uniformly among fonts seen"),
-        ("lift over majority", f"{lift:.1f}x", "below 1 means the model learned nothing"),
-        ("abstentions", f"{result.abstentions:,}", "no answer yet, before any label was seen"),
+        (
+            "chance baseline",
+            f"{result.chance_accuracy:.1%}",
+            "",
+            "guess uniformly among fonts seen",
+        ),
+        ("lift over majority", f"{lift:.1f}x", "", "below 1 means the model learned nothing"),
     ]
-    for name, value, meaning in rows:
-        table.add_row(name, value, meaning)
+    for name, whole, window, meaning in rows:
+        table.add_row(name, whole, window, meaning)
     return table
 
 
 def _classes_table(result: prequential.Result) -> Table:
-    """Per-font accuracy and how long each took to be recognised."""
+    """Per-font recall and precision, lifetime beside the recent window.
+
+    Recall says how much of a font the model catches, precision how much of what it
+    answers is right — a model that guesses one font for everything has high recall
+    there and precision on the floor, and only the pair shows it.
+    """
     table = Table(title="per font", title_justify="left", header_style="bold")
     # Short headers so the label, which is the class name, never has to wrap.
     table.add_column("font", overflow="fold", style="cyan")
     table.add_column("items", justify="right")
-    table.add_column("acc", justify="right")
-    table.add_column("sched", justify="right")
-    table.add_column("seen", justify="right")
-    table.add_column("right", justify="right")
-    table.add_column("lag", justify="right")
+    table.add_column("recall", justify="right")
+    table.add_column("prec", justify="right")
+    table.add_column("recent", justify="right")
 
-    for report in sorted(result.classes.values(), key=lambda item: -item.seen):
-        lag = report.discovery_lag
+    overall, recent = result.overall, result.recent
+    for label in overall.labels:
+        # A font can be absent from the rolling window entirely — it stopped
+        # arriving, or has not arrived yet — and has no recent recall to show.
+        in_window = recent.support(label) > 0
         table.add_row(
-            report.label,
-            f"{report.seen:,}",
-            f"{report.accuracy:.0%}",
-            f"{report.scheduled_start:,}" if report.scheduled_start is not None else "-",
-            f"{report.first_seen:,}" if report.first_seen is not None else "-",
-            f"{report.first_correct:,}" if report.first_correct is not None else "[dim]never[/dim]",
-            f"{lag:,}" if lag is not None else "[dim]-[/dim]",
+            label,
+            f"{overall.support(label):,}",
+            f"{overall.recall(label):.0%}",
+            f"{overall.precision(label):.0%}",
+            f"{recent.recall(label):.0%}" if in_window else "[dim]-[/dim]",
         )
     return table
 
