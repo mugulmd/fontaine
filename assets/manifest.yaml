@@ -9,7 +9,7 @@
 #   uv run fontaine assets status    check what is on disk, no network
 #   uv run fontaine assets hash      paste-ready entry for a file you added
 #
-# Adding or changing an asset is documented in AGENT.md, "Pinning the assets".
+# Adding or changing an asset is documented in AGENT.md, "Assets".
 
 # The one address assets are fetched from, each named by its file name. A GitHub
 # release serves its assets outside git history, so the bytes are versioned and
@@ -98,10 +98,22 @@ assets:
   # bytes is the only way to pin it at all.
   #
   # `license` here is the licence being *granted*, not one that had to be
-  # obtained — the release redistributes these bytes to every participant, and
-  # with no statement the default is all-rights-reserved. See AGENT.md,
-  # "Licensing your own backgrounds", for the EXIF and third-party-content
-  # checks that copyright ownership does not cover.
+  # obtained: you hold the copyright in a photo you took, but the release
+  # redistributes these bytes to every participant, and with no statement the
+  # default is all-rights-reserved. CC0-1.0 is the least friction.
+  #
+  # Four things copyright ownership does not cover, before a photo goes public:
+  #   - strip EXIF *before* hashing — phone GPS and device serials go out with
+  #     the release, and metadata is bytes, so removing it later breaks the pin;
+  #   - no identifiable people (droit à l'image and GDPR are separate from
+  #     copyright, and stronger in France);
+  #   - nothing else copyrighted in frame — a poster or artwork carries its own
+  #     rights, and France has no broad freedom-of-panorama exception;
+  #   - no legible text in the photo. That one is technical, not legal: a second
+  #     set of letterforms in the crop makes the item mislabelled rather than
+  #     hard, since the label names only the font that drew the foreground.
+  #
+  # Textures — fabric, stone, paper, tile, painted walls — clear all four.
   # ---------------------------------------------------------------------------
   - path: assets/backgrounds/floor.png
     sha256: 692d1d1760abed8152b7e878cc1332982f2b5d88a2b93edf71c4db8094f39040

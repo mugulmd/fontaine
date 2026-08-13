@@ -1,29 +1,4 @@
-"""The reference recognizer: hand-crafted ink features into an online kNN.
-
-This file is not special. It sits in ``models/`` and implements
-:class:`~fontaine.contracts.Recognizer` exactly like yours will, and the
-framework finds it the same way. Copy it as a starting point.
-
-k-nearest-neighbours over a bounded window of recent samples. It is here for two
-reasons. It has the property the task demands — a label never seen before can arrive
-mid-stream and simply be learned, with no output layer to resize and no retraining.
-And on this data it beat the alternatives comfortably: 56% against 8.3% chance on a
-twelve-font pool, where Gaussian naive Bayes, a Hoeffding tree and an adaptive forest
-all sat near 42%.
-
-Nothing is fitted at all. The model keeps the last ``window_size`` feature vectors
-and answers by majority vote among the nearest few, which makes it a fair floor for
-anything more sophisticated to be measured against.
-
-Two details that matter more than they look:
-
-* **the window size.** It is what the accuracy rests on. Measured over the same
-  2,000 items, a window of 1000 scores 53% where 300 scores 48% and 50 scores 31%:
-  a handful of remembered examples cannot cover a dozen fonts.
-* **the scaler.** River's online ``StandardScaler`` keeps a running mean and variance
-  per feature. The distance metric needs it: stroke width lives in the hundredths
-  and slant in the tens, and unscaled the vote would be decided by units alone.
-"""
+"""The reference recognizer: hand-crafted ink features into an online kNN."""
 
 from __future__ import annotations
 
