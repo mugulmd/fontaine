@@ -77,10 +77,18 @@ render:
     letter_spacing: [0.0, 0.0]
 
   background:
+    # A weighted mixture, not a fallback chain: the synthetic sources keep their
+    # share even when photo_dir is full. Only `photo` needs files, so it is the
+    # only one that can drop out — and when it does the rest are renormalized.
+    # These weights put photos on 60% of items and the six patterns on 40%.
     sources:
       photo: 6.0        # dropped and the rest renormalized if photo_dir is empty
-      gradient: 2.0
-      solid: 2.0
+      noise: 1.0        # grain at stroke scale, over a ramp
+      blobs: 1.0        # soft multi-colour wash, the mesh-gradient look
+      geometric: 0.75   # hard edges through the box — what forces a scrim
+      gradient: 0.75    # linear ramp
+      vignette: 0.25    # radial ramp
+      solid: 0.25       # the easy floor, useful as a control
     photo_dir: assets/backgrounds
     # Patch size relative to the canvas before resampling to fit: above 1 zooms
     # out to finer texture, below 1 zooms in to smoother gradients.

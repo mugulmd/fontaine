@@ -12,7 +12,9 @@ wheels/
 # Data and generated streams
 data/
 
-# Assets you drop in (keep the dirs, not the files)
+# Asset bytes never enter git — they live on the release the manifest's `release`
+# points at, and `fontaine assets fetch` verifies them by checksum on the way in.
+# assets/manifest.yaml is deliberately not ignored: it is the pin.
 assets/fonts/*
 !assets/fonts/.gitkeep
 assets/backgrounds/*

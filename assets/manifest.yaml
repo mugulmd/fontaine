@@ -1,0 +1,121 @@
+# Every asset a stream is generated from, pinned to an exact byte sequence.
+#
+# Why this file exists: generation is deterministic given (seed, config, assets),
+# so two participants only get comparable scores from byte-identical assets. The
+# checksums are the pin. The bytes themselves live on the release and are never
+# committed — git is a poor store for 11 MB of fonts and photos that never change.
+#
+#   uv run fontaine assets fetch     download and verify everything below
+#   uv run fontaine assets status    check what is on disk, no network
+#   uv run fontaine assets hash      paste-ready entry for a file you added
+#
+# Adding or changing an asset is documented in AGENT.md, "Pinning the assets".
+
+# The one address assets are fetched from, each named by its file name. A GitHub
+# release serves its assets outside git history, so the bytes are versioned and
+# downloadable without ever entering the repository.
+#
+# Deliberately the only source. An asset that could arrive from here *or* from
+# its upstream project is an asset whose bytes depend on which one answered, and
+# upstream projects re-generate their files.
+release: https://github.com/mugulmd/fontaine/releases/download/assets-v1
+
+# Seconds to wait on a stalled connection before giving up.
+timeout: 30
+
+assets:
+  # ---------------------------------------------------------------------------
+  # Fonts — the label space. Adding or removing one here changes the classes, so
+  # scores are only comparable across runs that used this exact list.
+  #
+  # `source` is attribution and is never requested over the network. Worth
+  # knowing why it could not be a download link even if we wanted one: these are
+  # the static instances served by the fonts.google.com download service, which
+  # has no stable per-file URL — every one of them already differs from what
+  # google/fonts ships at main, which now carries variable fonts for most of
+  # these families.
+  # ---------------------------------------------------------------------------
+  - path: assets/fonts/AbrilFatface-Regular.ttf
+    sha256: 583d89b4dee24140d8c2228b55a5b71668c172c06ee2a7c71e1d1892b2eb01d7
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Abril+Fatface
+  - path: assets/fonts/Anton-Regular.ttf
+    sha256: 97aae409210d255fb3b92f18c8af2ed14941e10a1ee134a35bb91f52086de1d0
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Anton
+  - path: assets/fonts/BebasNeue-Regular.ttf
+    sha256: 830ea186acffc2316ed1a4e42319246ba3b46b04e33a211079249bf901193f04
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Bebas+Neue
+  - path: assets/fonts/JetBrainsMono-Regular.ttf
+    sha256: b6b1ff4ddefe36d7f2a6174e1d001cab374e594519ee9049af028d577b64c5f5
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/JetBrains+Mono
+  - path: assets/fonts/Lobster-Regular.ttf
+    sha256: cddd7779fb2e78382a654f91dd5a656218cf133a244e17a2f5d960c06f95d73c
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Lobster
+  - path: assets/fonts/Merriweather_48pt-Regular.ttf
+    sha256: 21ef41984cec924ea5d0439f0c819a815256044e0bde46f1c5857ec1dd907931
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Merriweather
+  - path: assets/fonts/Montserrat-Regular.ttf
+    sha256: ef9cf99f0175bef530b88934bd904fcf56f773cec6fd4dfb8ccaf7ce2bbd395e
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Montserrat
+  - path: assets/fonts/Nunito-Regular.ttf
+    sha256: b0885056b60511b29aa9f69198055fe3bad13e76ec8a9b9e37cd61da7b4ee1e5
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Nunito
+  - path: assets/fonts/Oswald-Regular.ttf
+    sha256: 147373bfe10a9b1e0eb649bcf6408566d0cb7334271845f24d4c224cca1c4412
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Oswald
+  - path: assets/fonts/PlayfairDisplay-Regular.ttf
+    sha256: 861f838d481d28cbbd4793e45dc02f01d04c81e06ed98ab2779ca152ace9f27b
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Playfair+Display
+  - path: assets/fonts/Roboto-Regular.ttf
+    sha256: 15256405ecb0d880678833a582760efad538ab2932318b52c8105b267d159459
+    license: OFL-1.1
+    source: https://fonts.google.com/specimen/Roboto
+  - path: assets/fonts/Ubuntu-Regular.ttf
+    sha256: 540f19be11a368130641d00ec1c354b535c0803560f598d7d062486c9278387a
+    license: UFL-1.0
+    source: https://fonts.google.com/specimen/Ubuntu
+    # Ubuntu Font Licence, not the OFL: https://ubuntu.com/legal/font-licence
+
+  # ---------------------------------------------------------------------------
+  # Backgrounds — photographs only, and optional. Removing one changes the pixels
+  # but not the label space, so scores stay comparable in kind if not in value.
+  #
+  # Only photographs are pinned here. The synthetic canvases — noise, blobs,
+  # geometric, gradient, vignette, solid — are functions in render/background.py,
+  # drawn from each item's own RNG. They were files once; a checksum on a
+  # procedurally generated image pins its output rather than its input, and four
+  # fixed PNGs got cropped over and over where a function never repeats. A photo
+  # is the opposite case: you cannot regenerate it from a seed, so pinning the
+  # bytes is the only way to pin it at all.
+  #
+  # `license` here is the licence being *granted*, not one that had to be
+  # obtained — the release redistributes these bytes to every participant, and
+  # with no statement the default is all-rights-reserved. See AGENT.md,
+  # "Licensing your own backgrounds", for the EXIF and third-party-content
+  # checks that copyright ownership does not cover.
+  # ---------------------------------------------------------------------------
+  - path: assets/backgrounds/floor.png
+    sha256: 692d1d1760abed8152b7e878cc1332982f2b5d88a2b93edf71c4db8094f39040
+    license: CC0-1.0
+    source: own photograph
+  - path: assets/backgrounds/marble.png
+    sha256: 3427e1c96d78b0b11964676eb2232aba930c8816b8f4e378c5788bf1d0e709b2
+    license: CC0-1.0
+    source: own photograph
+  - path: assets/backgrounds/rug.png
+    sha256: 98aad60b5d621e57e3dd8466cfbe5bf6372d9cf8ba8a3d770b7b6f78b76651f6
+    license: CC0-1.0
+    source: own photograph
+  - path: assets/backgrounds/tiles.png
+    sha256: 616c020329c57b522571b860fba389c27aa2317f3465633cc4bab4fe7b7da5c1
+    license: CC0-1.0
+    source: own photograph

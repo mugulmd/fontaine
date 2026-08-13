@@ -32,8 +32,10 @@ ContentKind = Literal["word", "phrase", "sentence", "number", "price", "date", "
 #: Casing transforms applied to sampled text.
 Casing = Literal["as_is", "title", "upper", "lower"]
 
-#: Where a canvas comes from.
-BackgroundSource = Literal["photo", "gradient", "solid"]
+#: Where a canvas comes from. Everything but ``photo`` is drawn from the item's own
+#: RNG, so those need no files and never repeat — a synthetic canvas is a function,
+#: not an asset, and pinning a PNG of one would pin the wrong thing.
+BackgroundSource = Literal["photo", "noise", "blobs", "geometric", "gradient", "vignette", "solid"]
 
 
 class ConfigBase(BaseModel):
@@ -226,10 +228,21 @@ class TypographyConfig(ConfigBase):
 class BackgroundConfig(ConfigBase):
     """What the text sits on, and how well it stands out from it."""
 
-    #: Relative weights over background sources. ``photo`` is dropped and the
-    #: rest renormalized when ``photo_dir`` holds no images.
+    #: Relative weights over background sources — a mixture, not a fallback chain:
+    #: with images present the synthetic sources still get their share. ``photo`` is
+    #: the exception, dropped and the rest renormalized when ``photo_dir`` holds no
+    #: images, since it is the only source that needs files. The defaults keep
+    #: photos at 60% of items and the six synthetic patterns at 40% between them.
     sources: dict[BackgroundSource, Weight] = Field(
-        default_factory=lambda: {"photo": 6.0, "gradient": 2.0, "solid": 2.0}
+        default_factory=lambda: {
+            "photo": 6.0,
+            "noise": 1.0,
+            "blobs": 1.0,
+            "geometric": 0.75,
+            "gradient": 0.75,
+            "vignette": 0.25,
+            "solid": 0.25,
+        }
     )
     #: Directory of PNG images to crop patches from. Scanned recursively.
     photo_dir: Path = Path("assets/backgrounds")

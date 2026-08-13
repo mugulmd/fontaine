@@ -4,15 +4,10 @@ Online font recognition over a stream of text-box crops.
 
 ```sh
 uv sync                                             # 1. install
-uv run fontaine fonts scan                          # 2. see your label space
+uv run fontaine assets fetch                        # 2. get the fonts and backgrounds
 uv run fontaine generate -n 5000 -o data/streams/v1 # 3. freeze a stream
 uv run fontaine recognize --stream data/streams/v1  # 4. score the baseline
 ```
-
-Drop fonts in `assets/fonts/` before step 2 (`.ttf`/`.otf`, scanned
-recursively) — that directory *is* the label space. Backgrounds in
-`assets/backgrounds/` are optional. Everything about the stream is one file,
-`configs/stream.yaml`, fully commented.
 
 Then write your model as **one file in `models/`** implementing two methods:
 

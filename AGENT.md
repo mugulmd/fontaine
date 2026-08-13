@@ -8,14 +8,16 @@ way, so a change does not quietly undo a decision.
 **Read the "why" notes before changing behaviour.** Several choices here look
 arbitrary and are not: cap-height normalization instead of em sizes, contrast
 targeted at the hardest point of the background, stated arrival schedules instead
-of a stochastic process, one confusion matrix as the source of every metric. Each
-is recorded below with the failure it prevents.
+of a stochastic process, one confusion matrix as the source of every metric, assets
+pinned by checksum and fetched rather than committed. Each is recorded below with
+the failure it prevents.
 
 Layout:
 
 | Path | What it holds |
 | --- | --- |
 | `src/fontaine/contracts.py` | `FontFace`, `Sample`, `Recognizer` — the only module both sides import |
+| `src/fontaine/assets/` | the asset manifest, and the checksum-verified fetch |
 | `src/fontaine/fonts/` | registry: font dir → label space |
 | `src/fontaine/render/`, `text/` | crop synthesis: metrics, backgrounds, corpus |
 | `src/fontaine/stream/` | the arrival process and the generator |
@@ -26,26 +28,186 @@ Layout:
 | `src/fontaine/cli.py` | every command, one function each |
 | `models/` | challenger models, discovered by scanning — nothing in `src/` knows they exist |
 | `configs/stream.yaml` | the single config for a whole stream |
+| `assets/manifest.yaml` | every font and background *photo*, pinned by SHA-256 |
 
 ## Setup
 
 ```sh
 uv sync
+uv run fontaine assets fetch
 ```
 
-Two directories you fill in:
+The second command downloads the fonts and backgrounds, verifying each against
+`assets/manifest.yaml`. Two directories it fills in:
 
 - `assets/fonts/` — the fonts that make up the label space (`.ttf` and `.otf`,
   scanned recursively). Nothing outside it is ever read, so the font universe is
   exactly what you put there.
-- `assets/backgrounds/` — PNGs to crop background patches from. Optional: with the
-  directory empty, generation falls back to synthetic canvases.
+- `assets/backgrounds/` — **photographs** to crop background patches from. Optional:
+  with the directory empty the `photo` source drops out and the six synthetic
+  patterns are renormalized over the remaining share. Note that they are not a
+  fallback — see [Background sources](#background-sources).
 
 `configs/stream.yaml` is the single config describing a whole stream, and every
 option is commented there.
 
 Your own work goes in `models/` — one file per recognizer, discovered by scanning.
 See [Writing a recognizer](#writing-a-recognizer).
+
+## Pinning the assets
+
+Everyone competing has to be scored over the same stream, and the stream is not
+distributed — it is regenerated. Generation is deterministic given
+`(seed, config, assets)`, since every item derives its RNG from `(seed, index)`, so
+the assets are the only input that was not already pinned by a file in git. A font
+updated in place changes the pixels without changing anything a diff would show,
+and two participants would be comparing scores over different data without either
+noticing.
+
+`assets/manifest.yaml` pins them by SHA-256. The manifest is text and lives in git;
+the bytes live on a **GitHub release**, whose assets are served outside git history —
+so 11 MB of fonts and photos that never change are versioned and downloadable
+without being committed. That is the trade this design exists to make.
+
+```sh
+uv run fontaine assets fetch              # download and verify everything
+uv run fontaine assets fetch --only '*.ttf'   # just the fonts
+uv run fontaine assets status             # check disk against the manifest, no network
+uv run fontaine assets status --verbose   # ... listing every asset, not just the bad ones
+uv run fontaine assets hash <path>        # paste-ready entry for something you added
+```
+
+Three properties worth not undoing:
+
+- **The release is the only source.** There is deliberately no per-asset URL and no
+  upstream fallback: an asset that could arrive from either place is an asset whose
+  bytes depend on which one answered, and a fallback silently converts a broken
+  release into a stream that differs from everyone else's. `release` is a required
+  field, and `url_for` is the one function that turns an asset into an address.
+  `source` records where a font originally came from for attribution and is never
+  requested — it could not be a download link even if we wanted one, since these are
+  static instances from the `fonts.google.com` download service, which has no stable
+  per-file URL. Every one of the twelve already differs from what `google/fonts`
+  ships at `main`, which now carries variable fonts for most of those families.
+- **Nothing is installed until its digest matches.** A download streams into a
+  sibling `.part` file, is hashed as it arrives, and is renamed into place only on a
+  match — same directory, so the move is an atomic rename. A truncated transfer or a
+  release serving the wrong bytes leaves the asset directory exactly as it was, the
+  same reason `store.writer` writes the stream manifest last.
+- **Untracked files are reported.** An unpinned font in `assets/fonts/` enters the
+  label space, so it changes the classes and every score computed over them, while
+  every checksum in the manifest still verifies. It is the one way to be out of sync
+  that a checksum cannot catch, so `assets status` fails on it.
+
+`assets status` exits non-zero when the tree is not the pinned one, which is what
+makes it usable as a check before a run whose numbers are meant to be comparable.
+
+### Adding an asset
+
+1. **Drop the file in** `assets/fonts/` or `assets/backgrounds/`. Only fonts and
+   *photographs* belong there — a procedural pattern is a function in
+   `render/background.py`, not an asset. See
+   [Background sources](#background-sources).
+
+2. **Generate its entry.** Given a directory, this emits one entry per file the
+   manifest does not already pin, which is the shape of adding several fonts at once:
+
+   ```sh
+   uv run fontaine assets hash assets/fonts
+   ```
+
+   ```yaml
+   - path: assets/fonts/Cormorant-Regular.ttf
+     sha256: 4f21c0a95b0e77d3d6b2d9c8f0a1e4b7c3d5e8f9a0b1c2d3e4f5a6b7c8d9e0f1
+     license: null
+     source: null
+   ```
+
+3. **Paste it into `assets/manifest.yaml`** under `assets:`, and fill in `license`
+   and `source`. Those two are left empty rather than guessed because the release
+   redistributes the bytes, so the terms have to travel with them — and an entry that
+   looked complete would never get filled in. `assets status` counts what is still
+   unlicensed.
+
+4. **Upload the file to the release** the `release` line points at, keeping the file
+   name exactly as it is on disk — that name *is* the address, since `url_for` joins
+   the release URL to the file name and drops the directory. A release is a flat
+   namespace, so names must be unique across directories; the manifest refuses to
+   load if two collide, because otherwise one asset would silently overwrite the
+   other's bytes.
+
+5. **Verify a cold start.** In a clone with no assets, `fontaine assets fetch`
+   should report the new count with no failures.
+
+Adding a font changes the label space, so the classes and every score over them
+change with it. Cutting a new release tag (`assets-v2`) and bumping `release` is how
+that gets a version, rather than a leaderboard whose rows were measured against
+different pools.
+
+### Changing or replacing an asset
+
+Swapping bytes in place, or re-downloading a font that upstream has re-generated,
+leaves the file no longer matching its pin:
+
+```
+$ uv run fontaine assets status
+19/20 assets match assets/manifest.yaml
+
+assets/fonts/Anton-Regular.ttf is not the pinned file. If that was intended:
+    sha256: 97aae409210d255fb3b92f18c8af2ed14941e10a1ee134a35bb91f52086de1d0
+otherwise `fontaine assets fetch --force` puts the pinned bytes back
+```
+
+The digest printed is the one on disk, on its own line, to paste over the old
+`sha256` — then upload the new bytes to the release under the same file name. If
+the change was *not* deliberate, `fontaine assets fetch --force` restores the pinned
+bytes; `--force` is safe on a failure, since the existing file is only replaced once
+a download verifies.
+
+Take the second path more often than the first. Re-pinning is telling everyone their
+scores are no longer comparable with yesterday's, so it belongs with a release tag
+rather than a quiet commit.
+
+### Licensing your own backgrounds
+
+For a photo you took yourself, you already hold the copyright — nothing has to be
+obtained. The `license` field is the licence you are **granting**, not one you had to
+get, and it needs filling in anyway: the release redistributes those bytes to every
+participant, and with no statement the default is all-rights-reserved, which formally
+leaves them no right to the copy they just downloaded.
+
+`CC0-1.0` is the least friction — it puts the file in the public domain, so nobody has
+to think about attribution while fetching a texture. `CC-BY-4.0` if you want credit.
+
+```yaml
+- path: assets/backgrounds/kitchen-tile.png
+  sha256: 8f0a…
+  license: CC0-1.0
+  source: own photograph
+```
+
+Three things to check before a phone photo goes on a public release, none of which
+copyright ownership covers:
+
+- **Strip the EXIF.** Phone photos carry GPS coordinates, timestamps and the device
+  serial. A public release of a photo taken at home publishes your address. Strip it
+  *before* hashing — metadata is bytes, so removing it afterwards breaks the pin.
+- **No identifiable people.** Owning the copyright is not consent from the subject;
+  in France `droit à l'image` is separate and stronger than in most jurisdictions, and
+  GDPR treats a recognisable face as personal data.
+- **Nothing else copyrighted in frame.** A poster, painting, album cover or sculpture
+  carries its own rights, and France has no broad freedom-of-panorama exception. A
+  logo is usually fine as incidental background, artwork is not.
+
+Textures — fabric, concrete, paper, tile, wood, painted walls — sidestep all three,
+and are the better choice for this repo anyway: no faces, no third-party artwork, and
+no legible text of their own. That last one matters technically, not just legally. A
+background with readable text in it puts a second set of letterforms in the crop, and
+the label says only which font drew the foreground, so it is a mislabelled item rather
+than a hard one.
+
+None of the above is legal advice, and for a research challenge the practical risk is
+low; the EXIF point is the one worth acting on regardless.
 
 ## The font registry
 
@@ -123,6 +285,49 @@ A few decisions worth knowing about:
   accuracy ceiling.
 - **The text never correlates with the font.** Content and casing are sampled
   independently of the face, so the letterforms are the only signal.
+
+### Background sources
+
+`render.background.sources` is a **weighted mixture, not a fallback chain.** This is
+the thing most easily misread: having photographs in `assets/backgrounds/` does not
+switch the synthetic sources off, and the defaults put photos on 60% of items with
+the six patterns sharing the other 40%.
+
+```yaml
+sources:
+  photo: 6.0        # dropped and the rest renormalized if photo_dir is empty
+  noise: 1.0        # grain at stroke scale, over a ramp
+  blobs: 1.0        # soft multi-colour wash, the mesh-gradient look
+  geometric: 0.75   # hard edges through the box — what forces a scrim
+  gradient: 0.75    # linear ramp
+  vignette: 0.25    # radial ramp
+  solid: 0.25       # the easy floor, useful as a control
+```
+
+`photo` is the only conditional one, being the only one that needs files. When the
+directory is empty it drops out and the remaining weights renormalize — so an empty
+asset directory shifts the mixture rather than making every canvas flat.
+
+Each pattern covers a regime the photographs do not reliably reach: `noise` puts
+texture at the same spatial scale as the strokes, `geometric` puts a hard colour edge
+through the text box (the case `min_contrast` and the forced scrim exist for), and
+`blobs`/`gradient`/`vignette` are smooth but not flat. Set one to `1.0` and the rest
+to `0` to isolate a regime and see what it costs a model.
+
+**These were four PNGs until they became six functions.** A checksum on a
+procedurally generated image pins its output where the function is the input, and
+four fixed files got patch-cropped over and over where a function never repeats the
+same canvas twice. Nothing is distributed, and there is no licence question for a
+canvas nobody owns. Photographs are the opposite case — you cannot regenerate one
+from a seed, so pinning the bytes is the only way to pin it at all, and
+`assets/backgrounds/` is now photographs only.
+
+Parameters are sampled from the item RNG with ranges fixed in `background.py` rather
+than exposed in the config, following the existing `_gradient` and `_solid`. A knob
+per pattern would roughly triple `BackgroundConfig` for choices no experiment has
+needed to vary yet; the weights are the knob that matters. `noise` seeds a numpy
+generator from the item RNG, since per-pixel grain through `random` is impractical —
+item `i` still draws the same grain on every run, which the tests assert.
 
 ## The stream
 
@@ -344,7 +549,7 @@ Narrowing `corpus.casing` isolates the font signal if you want to measure that g
 ## Tests and checks
 
 ```sh
-uv run pytest        # 160 tests, well under a second
+uv run pytest        # 241 tests, well under a second
 uv run ruff format   # formatting
 uv run ruff check    # linting
 uv run ty check      # type checking
@@ -352,6 +557,11 @@ uv run ty check      # type checking
 
 Registry tests build their own minimal fonts with `fontTools`, so they assert on
 known glyph coverage and pass without depending on `assets/fonts/`.
+
+The asset-fetch tests run against a throwaway HTTP server on localhost (the
+`http_assets` fixture) rather than a mocked `urlopen`. The contract being tested is
+what ends up on disk after a wrong or truncated response, and a stubbed transport is
+exactly the thing that would paper that over. The suite stays offline either way.
 
 Ruff runs with docstring checks on, since this codebase explains *why* it does
 things and that only stays true if it is enforced. Two rule groups are switched

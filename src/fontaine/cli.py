@@ -14,6 +14,8 @@ from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
+from fontaine.assets import fetch as asset_fetch
+from fontaine.assets import manifest as asset_manifest
 from fontaine.config import DEFAULT_CONFIG_PATH, Range, StreamConfig, load_stream_config
 from fontaine.evaluate import prequential
 from fontaine.fonts import registry as font_registry
@@ -32,8 +34,10 @@ from fontaine.viz.contact_sheet import contact_sheet
 app = typer.Typer(help="Synthetic font-recognition streams.", no_args_is_help=True)
 fonts_app = typer.Typer(help="Inspect the font universe.", no_args_is_help=True)
 models_app = typer.Typer(help="Inspect the recognizers in models/.", no_args_is_help=True)
+assets_app = typer.Typer(help="Fetch and verify the pinned assets.", no_args_is_help=True)
 app.add_typer(fonts_app, name="fonts")
 app.add_typer(models_app, name="models")
+app.add_typer(assets_app, name="assets")
 
 console = Console()
 
@@ -47,6 +51,7 @@ VerboseOption = Annotated[
 ModelDirOption = Annotated[
     Path, typer.Option("--model-dir", help="Directory the recognizers are read from.")
 ]
+ManifestOption = Annotated[Path, typer.Option("--manifest", help="Asset manifest YAML.")]
 
 
 def _parse_range(value: str, option: str) -> Range:
@@ -97,6 +102,250 @@ def _scan(settings: StreamConfig, *, verbose: bool = False) -> font_registry.Fon
         console.print(f"[red]{error}[/red]")
         console.print("Drop .ttf/.otf files in, or pass --font-dir.", style="dim")
         raise typer.Exit(code=1) from error
+
+
+def _manifest(path: Path) -> asset_manifest.AssetManifest:
+    try:
+        return asset_manifest.load_manifest(path)
+    except asset_manifest.ManifestError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+
+
+def _selection(
+    manifest: asset_manifest.AssetManifest, only: str | None
+) -> tuple[asset_manifest.Asset, ...]:
+    """The assets a ``--only`` glob picks out, refusing a pattern that matches nothing.
+
+    Same reasoning as the arrival schedule's unmatched-pattern error: a typo that
+    silently selects zero assets looks exactly like a fetch with nothing to do.
+    """
+    selected = manifest.matching(only)
+    if not selected:
+        console.print(
+            f"[red]--only {only!r} matched none of the {len(manifest.assets)} assets[/red]"
+        )
+        raise typer.Exit(code=1)
+    return selected
+
+
+@assets_app.command("fetch")
+def assets_fetch(
+    manifest_path: ManifestOption = asset_manifest.DEFAULT_MANIFEST_PATH,
+    only: Annotated[
+        str | None, typer.Option("--only", help="Glob over paths or file names, e.g. '*.ttf'.")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Re-download even assets that already verify.")
+    ] = False,
+) -> None:
+    """Download every pinned asset and verify it against its checksum.
+
+    Safe to re-run: an asset already matching its checksum is left alone, so this
+    costs nothing on a warm asset directory. Nothing is installed until its digest
+    matches, so an interrupted or misdirected fetch leaves the asset directory as
+    it was rather than half-populated.
+    """
+    manifest = _manifest(manifest_path)
+    selected = _selection(manifest, only)
+    console.print(
+        f"{len(selected)} asset(s) from [bold]{manifest_path}[/bold] — "
+        f"[dim]{manifest.release}[/dim]"
+    )
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("fetching", total=len(selected))
+        report = asset_fetch.fetch_all(
+            manifest,
+            assets=selected,
+            force=force,
+            on_start=lambda asset: progress.update(task, description=asset.name),
+            on_done=lambda _: progress.advance(task),
+        )
+
+    style = "yellow" if report.failed else "green"
+    console.print(f"[{style}]{asset_fetch.summarize(report)}[/{style}]")
+
+    if report.failed:
+        console.print(_failures_table(report))
+        # The two failures call for opposite fixes, so only the hint that applies is
+        # printed: a mismatch is a manifest to re-pin, a 404 is a release to fill in.
+        if any("mismatch" in failure.reason for failure in report.failed):
+            console.print(
+                "a checksum mismatch means the manifest and the release disagree about the "
+                "bytes — if the change was intended, re-pin it with `fontaine assets hash`",
+                style="dim",
+            )
+        else:
+            console.print(
+                f"nothing answered for those — check the release actually holds them, "
+                f"under exactly these file names: {manifest.release}",
+                style="dim",
+            )
+        raise typer.Exit(code=1)
+
+
+@assets_app.command("status")
+def assets_status(
+    manifest_path: ManifestOption = asset_manifest.DEFAULT_MANIFEST_PATH,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", help="List every asset, not just the ones out of sync.")
+    ] = False,
+) -> None:
+    """Check what is on disk against the manifest, without touching the network.
+
+    Exits non-zero when the asset tree is not the pinned one, so it works as a
+    check before a run whose numbers are meant to be comparable with someone else's.
+    """
+    manifest = _manifest(manifest_path)
+    checks = asset_manifest.check_all(manifest)
+    extra = asset_manifest.untracked(manifest)
+
+    shown = checks if verbose else tuple(item for item in checks if not item.ok)
+    if shown:
+        console.print(_assets_table(shown, total=len(checks)))
+
+    n_ok = sum(1 for item in checks if item.ok)
+    console.print(
+        f"[green]{n_ok}[/green]/{len(checks)} assets match [bold]{manifest_path}[/bold]"
+        + ("" if verbose or not n_ok else " — pass --verbose to list them all")
+    )
+
+    # Outside the table, and one digest per line: this is the value to paste into
+    # the manifest when the change was deliberate, and a column narrow enough to
+    # wrap it mid-string would make it useless for exactly that.
+    changed = [item for item in checks if item.state is asset_manifest.State.CHANGED]
+    for item in changed:
+        console.print(f"\n{item.asset.path} is not the pinned file. If that was intended:")
+        console.print(f"    sha256: {item.actual}", style="cyan", highlight=False)
+    if changed:
+        console.print(
+            "otherwise `fontaine assets fetch --force` puts the pinned bytes back", style="dim"
+        )
+
+    if extra:
+        console.print(
+            f"[yellow]{len(extra)} untracked file(s)[/yellow] in the asset directories: "
+            + ", ".join(str(path) for path in extra[:6])
+            + (" ..." if len(extra) > 6 else "")
+        )
+        console.print(
+            "an unpinned font still enters the label space, so it changes the classes "
+            "while every checksum here keeps verifying — pin it or remove it",
+            style="dim",
+        )
+
+    unlicensed = [item.asset.path for item in checks if item.asset.license is None]
+    if unlicensed:
+        console.print(
+            f"[yellow]{len(unlicensed)} asset(s) with no licence recorded[/yellow] — the release "
+            f"redistributes these bytes, so the terms have to travel with them",
+            style="yellow",
+        )
+
+    if n_ok != len(checks) or extra:
+        raise typer.Exit(code=1)
+
+
+@assets_app.command("hash")
+def assets_hash(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(help="Files, or directories to scan for files not yet pinned."),
+    ],
+    manifest_path: ManifestOption = asset_manifest.DEFAULT_MANIFEST_PATH,
+) -> None:
+    """Print paste-ready manifest entries for files already on disk.
+
+    This is how a new asset gets pinned: drop the file in, run this, paste the
+    block into the manifest and fill in the licence and source. Given a directory,
+    it emits an entry for every file the manifest does not already pin, which is
+    the shape of adding several fonts at once.
+    """
+    manifest = _manifest(manifest_path)
+    pinned = {asset.path: asset for asset in manifest.assets}
+    root = Path.cwd()
+
+    targets: list[Path] = []
+    for given in paths:
+        resolved = given.resolve()
+        if not resolved.is_relative_to(root):
+            console.print(f"[red]{given} is outside the repo, so it cannot be an asset path[/red]")
+            raise typer.Exit(code=1)
+        relative = resolved.relative_to(root)
+        if resolved.is_dir():
+            targets.extend(
+                entry.relative_to(root)
+                for entry in sorted(resolved.rglob("*"))
+                if entry.is_file()
+                and not entry.name.startswith(".")
+                and entry.relative_to(root) not in pinned
+            )
+        elif resolved.is_file():
+            targets.append(relative)
+        else:
+            console.print(f"[red]no such file: {given}[/red]")
+            raise typer.Exit(code=1)
+
+    if not targets:
+        console.print("nothing to hash — every file given is already pinned", style="dim")
+        return
+
+    for path in targets:
+        existing = pinned.get(path)
+        if existing is not None:
+            console.print(
+                f"# {path} is already pinned as {existing.sha256[:12]}… — "
+                f"replace just its sha256 line",
+                style="dim",
+            )
+        # Printed without rich's markup parsing, which would eat any bracket in a path.
+        console.print(asset_manifest.entry_yaml(path), markup=False, highlight=False)
+
+
+def _assets_table(checks: tuple[asset_manifest.Check, ...], *, total: int) -> Table:
+    """Per-asset state, and what the state means."""
+    table = Table(
+        title=f"{len(checks)} of {total} assets", title_justify="left", header_style="bold"
+    )
+    table.add_column("asset", overflow="fold", style="cyan")
+    table.add_column("state")
+    table.add_column("licence")
+    table.add_column("detail", style="dim", overflow="fold")
+
+    styles = {
+        asset_manifest.State.OK: "green",
+        asset_manifest.State.MISSING: "yellow",
+        asset_manifest.State.CHANGED: "red",
+    }
+    for item in checks:
+        table.add_row(
+            str(item.asset.path),
+            f"[{styles[item.state]}]{item.state.value}[/{styles[item.state]}]",
+            item.asset.license or "[yellow]none[/yellow]",
+            asset_fetch.describe_state(item.state),
+        )
+    return table
+
+
+def _failures_table(report: asset_fetch.FetchReport) -> Table:
+    """What went wrong per failed asset, since different failures call for different fixes."""
+    table = Table(
+        title=f"{len(report.failed)} assets could not be fetched",
+        title_justify="left",
+        header_style="bold red",
+    )
+    table.add_column("asset", overflow="fold")
+    table.add_column("why", overflow="fold", style="dim")
+    for failure in report.failed:
+        table.add_row(str(failure.asset.path), failure.reason)
+    return table
 
 
 @models_app.command("list")
