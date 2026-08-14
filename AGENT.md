@@ -8,6 +8,7 @@ undo, the conventions to match.
 
 ```sh
 uv sync && uv run fontaine assets fetch   # setup: deps, then the pinned fonts/photos
+uv sync --group models                    # torch as well, for the ResNet recognizer
 uv run fontaine fonts scan                # label space from assets/fonts/
 uv run fontaine preview -n 48             # contact sheet — fastest look at the pixels
 uv run fontaine arrival -n 50000          # simulate the font schedule, nothing drawn
@@ -88,6 +89,8 @@ Each looks arbitrary and is load-bearing; the failure it prevents is in brackets
 - Tests build their own fonts with `fontTools` and serve HTTP from localhost: the suite
   needs neither `assets/` nor a network.
 - Prefer a function over a config knob until an experiment needs to vary it.
+- A dependency only a model needs goes in the `models` dependency group rather than in
+  `dependencies`.
 
 ## Assets
 
