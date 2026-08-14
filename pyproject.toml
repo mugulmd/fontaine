@@ -30,6 +30,10 @@ dev = [
     "ruff>=0.16.0",
     "ty>=0.0.65",
 ]
+models = [
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+]
 
 [tool.ruff]
 line-length = 100
